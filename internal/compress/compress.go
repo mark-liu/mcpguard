@@ -110,8 +110,20 @@ func processArray(arr []interface{}, cfg Config, fieldName string) []interface{}
 	return result
 }
 
-// processString truncates content fields to max_content_length.
+// processString handles stringified JSON (common in MCP tool results where
+// content[].text contains a JSON string) and truncates content fields.
 func processString(s string, cfg Config, fieldName string) string {
+	// If the string looks like embedded JSON, parse, compress, and re-stringify.
+	if len(s) > 1 && (s[0] == '{' || s[0] == '[') {
+		var inner interface{}
+		if err := json.Unmarshal([]byte(s), &inner); err == nil {
+			inner = processValue(inner, cfg, "")
+			if out, err := json.Marshal(inner); err == nil {
+				return string(out)
+			}
+		}
+	}
+
 	if cfg.MaxContentLength <= 0 {
 		return s
 	}
