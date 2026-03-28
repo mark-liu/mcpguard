@@ -10,11 +10,19 @@ mcpguard sits between Claude Code and any MCP server, intercepting JSON-RPC tool
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install mark-liu/tap/mcpguard
+```
+
+### Go
+
 ```bash
 go install github.com/mark-liu/mcpguard/cmd/mcpguard@latest
 ```
 
-Or build from source:
+### From source
 
 ```bash
 git clone https://github.com/mark-liu/mcpguard.git
@@ -40,7 +48,11 @@ mcpguard --config configs/discord.yaml --compress-only /path/to/discord-mcp
 
 ### Claude Code integration
 
-Add to your MCP server config in `~/.claude.json`:
+```bash
+claude mcp add discord -s user -- mcpguard --config /path/to/discord.yaml /path/to/discord-mcp
+```
+
+Or add to `~/.claude.json` manually:
 
 ```json
 {
