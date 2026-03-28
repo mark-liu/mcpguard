@@ -1,0 +1,56 @@
+version: 2
+
+project_name: mcpguard
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: mcpguard
+    main: ./cmd/mcpguard
+    binary: mcpguard
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^Merge"
+
+brews:
+  - name: mcpguard
+    repository:
+      owner: mark-liu
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/mark-liu/mcpguard"
+    description: "MCP stdio proxy — prompt injection scanning and payload compression for LLM safety"
+    license: "MIT"
+    install: |
+      bin.install "mcpguard"
+    test: |
+      assert_match "mcpguard", shell_output("#{bin}/mcpguard --help 2>&1", 1)
