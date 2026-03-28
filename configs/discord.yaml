@@ -1,0 +1,8 @@
+compress:
+  max_content_length: 500
+  strip_fields: ["id", "avatar", "discriminator", "avatar_url", "banner", "accent_color"]
+  content_fields: ["content", "text", "body", "message", "description"]
+  max_messages: 50
+scan:
+  sensitivity: medium
+  action: warn

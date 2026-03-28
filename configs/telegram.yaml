@@ -1,0 +1,9 @@
+compress:
+  max_content_length: 500
+  strip_fields: ["photo", "thumb", "file_reference", "dc_id", "access_hash", "file_id"]
+  content_fields: ["text", "message", "caption", "body", "content"]
+  max_messages: 30
+  max_array_items: 50
+scan:
+  sensitivity: medium
+  action: warn

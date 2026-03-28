@@ -1,0 +1,6 @@
+mcpguard
+*.exe
+*.test
+*.out
+dist/
+.DS_Store
