@@ -101,8 +101,12 @@ func TestNoConfig(t *testing.T) {
 
 	// JSON marshalling may reorder keys but content should be equivalent.
 	var orig, result map[string]interface{}
-	json.Unmarshal([]byte(input), &orig)
-	json.Unmarshal(out, &result)
+	if err := json.Unmarshal([]byte(input), &orig); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatal(err)
+	}
 
 	if result["content"] != orig["content"] || result["avatar"] != orig["avatar"] {
 		t.Error("no-op config should preserve all fields")
