@@ -180,7 +180,27 @@ func (p *Proxy) processMessage(line []byte) []byte {
 
 	// Scan pass: extract text content and scan for injection.
 	if !p.compressOnly {
-		p.scanResult(processed)
+		if p.scanResult(processed) {
+			// Injection detected and action is "block" — return a JSON-RPC
+			// error instead of forwarding the original payload.
+			errResp := map[string]interface{}{
+				"jsonrpc": "2.0",
+				"error": map[string]interface{}{
+					"code":    -32001,
+					"message": "mcpguard: request blocked due to detected prompt injection",
+				},
+			}
+			if id, ok := msg["id"]; ok {
+				errResp["id"] = json.RawMessage(id)
+			}
+			out, err := json.Marshal(errResp)
+			if err != nil {
+				atomic.AddInt64(&p.stats.BytesOut, int64(len(line)))
+				return line
+			}
+			atomic.AddInt64(&p.stats.BytesOut, int64(len(out)))
+			return out
+		}
 	}
 
 	// Reassemble the message with the compressed result.
@@ -196,7 +216,9 @@ func (p *Proxy) processMessage(line []byte) []byte {
 }
 
 // scanResult extracts text strings from the result and scans them.
-func (p *Proxy) scanResult(data []byte) {
+// Returns true if the message should be blocked (verdict=block AND action=block).
+func (p *Proxy) scanResult(data []byte) bool {
+	blocked := false
 	texts := extractStrings(data)
 	for _, text := range texts {
 		result := p.scanner.Scan(text)
@@ -205,6 +227,7 @@ func (p *Proxy) scanResult(data []byte) {
 			atomic.AddInt64(&p.stats.InjectionBlocks, 1)
 			action := p.cfg.Scan.Action
 			if action == "block" {
+				blocked = true
 				fmt.Fprintf(os.Stderr, "[mcpguard] BLOCKED: injection detected (score=%.1f, %d matches)\n", result.Score, len(result.Matches))
 				for _, m := range result.Matches {
 					fmt.Fprintf(os.Stderr, "  %s [%s/%s]: %q\n", m.PatternID, m.Category, m.Severity, truncate(m.Text, 80))
@@ -223,6 +246,7 @@ func (p *Proxy) scanResult(data []byte) {
 			}
 		}
 	}
+	return blocked
 }
 
 // extractStrings pulls all string values from a JSON structure for scanning.
