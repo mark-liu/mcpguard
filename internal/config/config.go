@@ -68,5 +68,21 @@ func Load(path string) (Config, error) {
 		cfg.Scan.Action = "warn"
 	}
 
+	// Validate action — a typo here silently makes all detections no-ops.
+	switch cfg.Scan.Action {
+	case "warn", "block":
+		// valid
+	default:
+		return Config{}, fmt.Errorf("invalid scan action %q: must be \"warn\" or \"block\"", cfg.Scan.Action)
+	}
+
+	// Validate sensitivity.
+	switch cfg.Scan.Sensitivity {
+	case "low", "medium", "high":
+		// valid
+	default:
+		return Config{}, fmt.Errorf("invalid scan sensitivity %q: must be \"low\", \"medium\", or \"high\"", cfg.Scan.Sensitivity)
+	}
+
 	return cfg, nil
 }
