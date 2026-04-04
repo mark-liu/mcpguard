@@ -171,14 +171,10 @@ func (p *Proxy) processMessage(line []byte) []byte {
 
 	atomic.AddInt64(&p.stats.MessagesProcessed, 1)
 
-	// Compress pass.
 	processed := []byte(resultRaw)
-	if !p.scanOnly {
-		compressed, _ := compress.Compress(processed, p.compressCfg)
-		processed = compressed
-	}
 
-	// Scan pass: extract text content and scan for injection.
+	// Scan pass FIRST: scan the original uncompressed data so truncation
+	// cannot hide injection payloads in the tail.
 	if !p.compressOnly {
 		if p.scanResult(processed) {
 			// Injection detected and action is "block" — return a JSON-RPC
@@ -201,6 +197,12 @@ func (p *Proxy) processMessage(line []byte) []byte {
 			atomic.AddInt64(&p.stats.BytesOut, int64(len(out)))
 			return out
 		}
+	}
+
+	// Compress pass AFTER scan: safe to truncate now that scanning is done.
+	if !p.scanOnly {
+		compressed, _ := compress.Compress(processed, p.compressCfg)
+		processed = compressed
 	}
 
 	// Reassemble the message with the compressed result.
