@@ -59,3 +59,85 @@ func TestScanBeforeCompress_InjectionInTail(t *testing.T) {
 		t.Errorf("expected injection to be blocked (error response), but got forwarded result; compression likely truncated before scan")
 	}
 }
+
+func TestWalkStrings_ShortPatternDetected(t *testing.T) {
+	// Short prompt-marker strings like "[INST]" (6 chars) must not be skipped
+	// by the minimum-length filter in walkStrings/extractStrings.
+	cfg := config.Config{
+		Scan: config.ScanConfig{
+			Sensitivity: "high",
+			Action:      "block",
+		},
+	}
+
+	p := New(cfg, true, false, false)
+
+	// The "text" value is only "[INST]" — 6 chars, well below the old 10-char minimum.
+	result := map[string]interface{}{
+		"content": []interface{}{
+			map[string]interface{}{
+				"type": "text",
+				"text": "[INST]",
+			},
+		},
+	}
+	resultJSON, _ := json.Marshal(result)
+
+	msg := map[string]json.RawMessage{
+		"jsonrpc": json.RawMessage(`"2.0"`),
+		"id":      json.RawMessage(`1`),
+		"result":  json.RawMessage(resultJSON),
+	}
+	line, _ := json.Marshal(msg)
+
+	out := p.processMessage(line)
+
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	if _, hasError := resp["error"]; !hasError {
+		t.Errorf("expected short pattern '[INST]' to be detected and blocked, but it was forwarded; walkStrings minimum length likely too high")
+	}
+}
+
+func TestWalkStrings_SysMarkerDetected(t *testing.T) {
+	// "<<sys>>" is 7 chars — must be scanned.
+	cfg := config.Config{
+		Scan: config.ScanConfig{
+			Sensitivity: "high",
+			Action:      "block",
+		},
+	}
+
+	p := New(cfg, true, false, false)
+
+	result := map[string]interface{}{
+		"content": []interface{}{
+			map[string]interface{}{
+				"type": "text",
+				"text": "<<sys>>",
+			},
+		},
+	}
+	resultJSON, _ := json.Marshal(result)
+
+	msg := map[string]json.RawMessage{
+		"jsonrpc": json.RawMessage(`"2.0"`),
+		"id":      json.RawMessage(`1`),
+		"result":  json.RawMessage(resultJSON),
+	}
+	line, _ := json.Marshal(msg)
+
+	out := p.processMessage(line)
+
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	if _, hasError := resp["error"]; !hasError {
+		t.Errorf("expected short pattern '<<sys>>' to be detected and blocked")
+	}
+}

@@ -263,11 +263,13 @@ func extractStrings(data []byte) []string {
 	return strings
 }
 
-// walkStrings recursively collects string values longer than 10 chars.
+// walkStrings recursively collects string values longer than 3 chars.
+// The minimum avoids scanning trivially short values (single chars, empty)
+// while still catching short injection markers like "[INST]" (6), "<<sys>>" (7).
 func walkStrings(v interface{}, out *[]string) {
 	switch val := v.(type) {
 	case string:
-		if len(val) > 10 {
+		if len(val) > 3 {
 			*out = append(*out, val)
 		}
 	case map[string]interface{}:
