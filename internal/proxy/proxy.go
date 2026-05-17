@@ -22,12 +22,12 @@ import (
 
 // Stats tracks proxy-level metrics.
 type Stats struct {
-	MessagesTotal      int64
-	MessagesProcessed  int64
-	BytesIn            int64
-	BytesOut           int64
-	InjectionWarnings  int64
-	InjectionBlocks    int64
+	MessagesTotal     int64
+	MessagesProcessed int64
+	BytesIn           int64
+	BytesOut          int64
+	InjectionWarnings int64
+	InjectionBlocks   int64
 }
 
 // Proxy is the main stdio proxy.
@@ -221,25 +221,24 @@ func (p *Proxy) processMessage(line []byte) []byte {
 // Returns true if the message should be blocked (verdict=block AND action=block).
 func (p *Proxy) scanResult(data []byte) bool {
 	blocked := false
-	texts := extractStrings(data)
+	texts := scan.ExtractStrings(data)
 	for _, text := range texts {
 		result := p.scanner.Scan(text)
 		switch result.Verdict {
 		case scan.VerdictBlock:
 			atomic.AddInt64(&p.stats.InjectionBlocks, 1)
-			action := p.cfg.Scan.Action
-			if action == "block" {
+			label := "WARNING: potential injection"
+			if p.cfg.Scan.Action == "block" {
 				blocked = true
-				fmt.Fprintf(os.Stderr, "[mcpguard] BLOCKED: injection detected (score=%.1f, %d matches)\n", result.Score, len(result.Matches))
-				for _, m := range result.Matches {
-					fmt.Fprintf(os.Stderr, "  %s [%s/%s]: %q\n", m.PatternID, m.Category, m.Severity, truncate(m.Text, 80))
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "[mcpguard] WARNING: potential injection (score=%.1f, %d matches)\n", result.Score, len(result.Matches))
-				for _, m := range result.Matches {
-					fmt.Fprintf(os.Stderr, "  %s [%s/%s]: %q\n", m.PatternID, m.Category, m.Severity, truncate(m.Text, 80))
-				}
+				label = "BLOCKED: injection detected"
 			}
+			fmt.Fprintf(os.Stderr, "[mcpguard] %s (score=%.1f, %d matches)\n",
+				label, result.Score, len(result.Matches))
+			// Metadata-only output — proxy stderr inherits the parent CC
+			// process fd so Claude can read it. Raw match excerpts here
+			// would create the same audit-log-as-backdoor channel that
+			// the hook subcommand defends against.
+			scan.FormatMatchesSafe(os.Stderr, result.Matches)
 			atomic.AddInt64(&p.stats.InjectionWarnings, 1)
 		case scan.VerdictPass:
 			if len(result.Matches) > 0 {
@@ -249,46 +248,6 @@ func (p *Proxy) scanResult(data []byte) bool {
 		}
 	}
 	return blocked
-}
-
-// extractStrings pulls all string values from a JSON structure for scanning.
-func extractStrings(data []byte) []string {
-	var v interface{}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return nil
-	}
-
-	var strings []string
-	walkStrings(v, &strings)
-	return strings
-}
-
-// walkStrings recursively collects string values longer than 3 chars.
-// The minimum avoids scanning trivially short values (single chars, empty)
-// while still catching short injection markers like "[INST]" (6), "<<sys>>" (7).
-func walkStrings(v interface{}, out *[]string) {
-	switch val := v.(type) {
-	case string:
-		if len(val) > 3 {
-			*out = append(*out, val)
-		}
-	case map[string]interface{}:
-		for _, v := range val {
-			walkStrings(v, out)
-		}
-	case []interface{}:
-		for _, v := range val {
-			walkStrings(v, out)
-		}
-	}
-}
-
-// truncate shortens a string to maxLen, appending "..." if truncated.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // printStats writes compression and scan stats to stderr.

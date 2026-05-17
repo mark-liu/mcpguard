@@ -28,8 +28,8 @@ type Result struct {
 type Engine struct {
 	sensitivity string
 	threshold   float64
-	literals    []Pattern         // literal patterns (matched via lowercased substring)
-	regexes     []compiledRegex   // compiled regex patterns
+	literals    []Pattern       // literal patterns (matched via lowercased substring)
+	regexes     []compiledRegex // compiled regex patterns
 	all         []Pattern
 }
 
@@ -77,51 +77,56 @@ func (e *Engine) PatternCount() int {
 // Scan runs the detection pipeline on a text string and returns a result.
 func (e *Engine) Scan(text string) Result {
 	start := time.Now()
-
-	// Preprocess: strip zero-width chars, normalise whitespace.
 	clean := stripInvisible(text)
 	matches := e.scanText(clean)
+	return e.verdictFromMatches(matches, start)
+}
 
-	elapsed := time.Since(start)
+// AggregateScan scans every input text, unions the matches across all of
+// them, and produces ONE verdict from the combined match set. Used by
+// one-shot consumers (e.g. the PostToolUse hook) that need cross-field
+// aggregation — two high-severity hits split across two strings each fall
+// below the per-string threshold, but the combined set should still block.
+func (e *Engine) AggregateScan(texts []string) Result {
+	start := time.Now()
+	var all []Match
+	for _, text := range texts {
+		all = append(all, e.scanText(stripInvisible(text))...)
+	}
+	return e.verdictFromMatches(all, start)
+}
+
+// verdictFromMatches applies the critical-short-circuit and threshold rules
+// to a match set and returns a Result. Shared by single-string Scan and
+// multi-string AggregateScan so the scoring semantics stay identical.
+func (e *Engine) verdictFromMatches(matches []Match, start time.Time) Result {
+	timing := func() int64 { return time.Since(start).Microseconds() }
 
 	if len(matches) == 0 {
-		return Result{
-			Verdict:  VerdictPass,
-			Score:    0,
-			TimingUS: elapsed.Microseconds(),
-		}
+		return Result{Verdict: VerdictPass, TimingUS: timing()}
 	}
 
-	// Critical severity triggers immediate block.
 	for _, m := range matches {
 		if m.Severity == SeverityCritical {
-			score := e.score(matches)
 			return Result{
 				Verdict:  VerdictBlock,
-				Score:    score,
+				Score:    e.score(matches),
 				Matches:  matches,
-				TimingUS: time.Since(start).Microseconds(),
+				TimingUS: timing(),
 			}
 		}
 	}
 
-	// Score remaining matches against threshold.
 	score := e.score(matches)
-
+	verdict := VerdictPass
 	if score >= e.threshold {
-		return Result{
-			Verdict:  VerdictBlock,
-			Score:    score,
-			Matches:  matches,
-			TimingUS: time.Since(start).Microseconds(),
-		}
+		verdict = VerdictBlock
 	}
-
 	return Result{
-		Verdict:  VerdictPass,
+		Verdict:  verdict,
 		Score:    score,
 		Matches:  matches,
-		TimingUS: time.Since(start).Microseconds(),
+		TimingUS: timing(),
 	}
 }
 
@@ -216,12 +221,18 @@ func dedup(matches []Match) []Match {
 }
 
 // stripInvisible removes zero-width characters and other invisible formatters
-// that could be used to evade pattern matching.
+// that could be used to evade pattern matching. The Unicode tag range
+// U+E0001\u2013U+E007F is preserved here so the uo-004 obfuscation pattern can
+// still match \u2014 stripping the tag chars before scanning would silently
+// disarm that detector.
 func stripInvisible(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch r {
 		case '\u200B', '\u200C', '\u200D', '\uFEFF':
 			return -1
+		}
+		if r >= 0xE0001 && r <= 0xE007F {
+			return r
 		}
 		if r != '\n' && r != '\r' && r != '\t' && r != ' ' && unicode.In(r, unicode.Cf) {
 			return -1

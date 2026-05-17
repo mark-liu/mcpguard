@@ -23,14 +23,27 @@ import (
 const version = "0.1.0"
 
 func main() {
+	args := os.Args[1:]
+
+	// Subcommand dispatch happens before flag parsing so subcommand-specific
+	// flags don't collide with the proxy mode's --config / --scan-only / etc.
+	if len(args) > 0 {
+		switch args[0] {
+		case "hook":
+			os.Exit(runHookIO(args[1:], os.Stdin, os.Stdout, os.Stderr))
+		case "audit":
+			os.Exit(runAudit(args[1:], os.Stdout, os.Stderr))
+		case "explain":
+			os.Exit(runExplain(args[1:], os.Stdout, os.Stderr))
+		}
+	}
+
 	var (
 		configPath   string
 		scanOnly     bool
 		compressOnly bool
 		showStats    bool
 	)
-
-	args := os.Args[1:]
 
 	// Parse flags manually to preserve child command args exactly.
 	var childArgs []string
@@ -95,9 +108,13 @@ func main() {
 func printUsage() {
 	fmt.Fprint(os.Stderr, `mcpguard — MCP stdio proxy for prompt injection scanning and payload compression
 
-Usage: mcpguard [flags] <command> [args...]
+Usage:
+  mcpguard [flags] <command> [args...]      proxy mode (stdio MCP wrapper)
+  mcpguard hook [hook-flags]                PostToolUse hook for Claude Code
+  mcpguard audit [filters]                  query the hook event log
+  mcpguard explain <pattern_id>             describe one detection pattern
 
-Flags:
+Flags (proxy mode):
   --config, -c <path>   YAML config file (optional, defaults to scan-only)
   --scan-only            Skip compression, only scan for injection
   --compress-only        Skip scanning, only compress
@@ -109,6 +126,7 @@ Examples:
   mcpguard --config discord.yaml /path/to/discord-mcp
   mcpguard --config telegram.yaml uv --directory /path/to/telegram-mcp run main.py
   mcpguard npx -y some-mcp-server
+  mcpguard hook --sensitivity medium --mode warn   (see "mcpguard hook --help")
 `)
 }
 

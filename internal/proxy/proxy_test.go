@@ -62,7 +62,7 @@ func TestScanBeforeCompress_InjectionInTail(t *testing.T) {
 
 func TestWalkStrings_ShortPatternDetected(t *testing.T) {
 	// Short prompt-marker strings like "[INST]" (6 chars) must not be skipped
-	// by the minimum-length filter in walkStrings/extractStrings.
+	// by the minimum-length filter in scan.WalkStrings / scan.ExtractStrings.
 	cfg := config.Config{
 		Scan: config.ScanConfig{
 			Sensitivity: "high",
@@ -98,7 +98,7 @@ func TestWalkStrings_ShortPatternDetected(t *testing.T) {
 	}
 
 	if _, hasError := resp["error"]; !hasError {
-		t.Errorf("expected short pattern '[INST]' to be detected and blocked, but it was forwarded; walkStrings minimum length likely too high")
+		t.Errorf("expected short pattern '[INST]' to be detected and blocked, but it was forwarded; scan.WalkStrings minimum length likely too high")
 	}
 }
 
