@@ -143,5 +143,26 @@ func allPatterns() []Pattern {
 		p("enc-001", "encoded-injection", SeverityHigh, PatternRegex, `(?i)eval\s*\(\s*atob\s*\(`),
 		p("enc-002", "encoded-injection", SeverityMedium, PatternRegex, `(?i)base64[_\-]?decode`),
 		p("enc-003", "encoded-injection", SeverityMedium, PatternRegex, `(?i)String\.fromCharCode\s*\(`),
+
+		// html-injection — active HTML execution vectors (5)
+		// Tuned for Gmail / Playwright responses that legitimately contain
+		// structural HTML (<script>, <iframe>): we DON'T flag those because
+		// marketing email routinely embeds both and would block any pair
+		// at medium sensitivity. We DO flag inline event handlers, data:
+		// URIs, CSS expression(), and instruction-bearing HTML comments —
+		// each is rare in legitimate content but a reliable signal of
+		// attacker-shaped HTML.
+		p("hi-001", "html-injection", SeverityMedium, PatternRegex, `(?i)\son(load|error|click|focus|mouseover|submit|toggle|animationend)\s*=\s*["']`),
+		p("hi-002", "html-injection", SeverityMedium, PatternRegex, `(?i)data:text/html`),
+		p("hi-003", "html-injection", SeverityMedium, PatternRegex, `(?i)data:application/(x-)?(java)?script`),
+		p("hi-004", "html-injection", SeverityHigh, PatternRegex, `(?i)expression\s*\(\s*['"a-z(]`),
+		p("hi-005", "html-injection", SeverityHigh, PatternRegex, `<!--\s*(?i)(ignore|disregard|forget)\s+(any|all|previous|your)`),
+
+		// svg-injection — SVG-specific XSS (2)
+		// SVG payloads bypass HTML sanitisers via foreignObject (renders
+		// arbitrary HTML) or inline event handlers on the <svg> element
+		// itself.
+		p("svg-001", "svg-injection", SeverityMedium, PatternRegex, `(?i)<svg[^>]*\son\w+\s*=`),
+		p("svg-002", "svg-injection", SeverityMedium, PatternRegex, `(?i)<foreignObject[\s>]`),
 	}
 }
