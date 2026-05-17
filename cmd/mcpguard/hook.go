@@ -11,9 +11,13 @@ import (
 )
 
 // hookEnvelope mirrors the Claude Code PostToolUse JSON sent on stdin.
-// We only inspect tool_name and tool_response — everything else is opaque.
+// We inspect tool_name, tool_input, and tool_response. tool_input is the
+// model-constructed argument vector — attacker content in a prior turn's
+// response can poison the model into shaping a follow-up call's input
+// (indirect injection), so we scan both sides and aggregate the verdict.
 type hookEnvelope struct {
 	ToolName     string          `json:"tool_name"`
+	ToolInput    json.RawMessage `json:"tool_input"`
 	ToolResponse json.RawMessage `json:"tool_response"`
 }
 
@@ -120,12 +124,16 @@ func runHookIOPath(args []string, stdin io.Reader, stdout, stderr io.Writer, aud
 		fmt.Fprintf(stderr, "mcpguard hook: parse envelope: %v\n", err)
 		return 0
 	}
-	if len(env.ToolResponse) == 0 {
+	if len(env.ToolResponse) == 0 && len(env.ToolInput) == 0 {
 		return 0
 	}
 
 	engine := scan.NewEngine(sensitivity)
-	result := scan.AggregateScan(engine, scan.ExtractStrings(env.ToolResponse))
+	texts := scan.ExtractStrings(env.ToolResponse)
+	if len(env.ToolInput) > 0 {
+		texts = append(texts, scan.ExtractStrings(env.ToolInput)...)
+	}
+	result := scan.AggregateScan(engine, texts)
 
 	if result.Verdict == scan.VerdictPass {
 		return 0
