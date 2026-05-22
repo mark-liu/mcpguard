@@ -1,0 +1,68 @@
+[package]
+name = "mcpguard"
+version = "0.2.0"
+edition = "2024"
+description = "Transparent MCP stdio proxy — scans tool results for prompt injection and compresses payloads before they reach the LLM"
+license = "MIT OR GPL-3.0"
+repository = "https://github.com/mark-liu/mcpguard"
+keywords = ["mcp", "security", "prompt-injection", "llm", "proxy"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "mcpguard"
+path = "src/main.rs"
+
+[dependencies]
+# Scan engine: ASCII case-insensitive literal matching with stable byte offsets
+# (see SPEC §5.1 — aho-corasick avoids the lower-then-slice panic trap).
+aho-corasick = "1"
+regex = "1"
+# serde_json with preserve_order keeps JSON-RPC object key order closest to the
+# original payload on re-marshal (SPEC §5.6). serde_yaml for config.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+# Audit log: metadata-only SHA-256 prefix (SPEC §4.6 / Rule #28).
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+# CLI: subcommands only; proxy mode keeps a manual parse for argv-exactness (SPEC §4.7).
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+# NOTE: deliberately NO rmcp / tokio — mcpguard is a synchronous stdio proxy.
+# Two std::thread pump loops mirror the Go goroutine structure 1:1 (SPEC §3).
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+# cargo-dist config — copied from webguard verbatim (SPEC §10).
+[workspace.metadata.dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+installers = ["homebrew"]
+tap = "mark-liu/homebrew-tap"
+publish-jobs = ["homebrew"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+# Pin macOS runners to Sequoia (SDK 15.x). The default macos-14 (Sonoma SDK
+# 14.5) produces aarch64 binaries that misbehave on macOS 26 hosts; macos-15
+# binaries link against SDK 15.x which behaves correctly. (webguard Cargo.toml)
+[workspace.metadata.dist.github-custom-runners.aarch64-apple-darwin]
+runner = "macos-15"
+[workspace.metadata.dist.github-custom-runners.x86_64-apple-darwin]
+runner = "macos-15-intel"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
