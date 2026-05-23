@@ -130,8 +130,8 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
 fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
     let _ = writeln!(
         w,
-        "{:<25} {:<7} {:<6} {:<7} {}",
-        "ts", "verdict", "score", "matches", "tool_name"
+        "{:<25} {:<7} {:<6} {:<7} tool_name",
+        "ts", "verdict", "score", "matches"
     );
     let _ = writeln!(w, "{}", "-".repeat(100));
     for e in events {

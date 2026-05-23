@@ -407,7 +407,10 @@ mod tests {
         let (code, stdout, stderr) =
             run_hook_test(&["--sensitivity", "low", "--mode", "block"], &input);
         assert_eq!(code, 0);
-        assert!(!stdout.is_empty(), "split-payload at low sensitivity: cross-field aggregate should block; no redaction. stderr={stderr}");
+        assert!(
+            !stdout.is_empty(),
+            "split-payload at low sensitivity: cross-field aggregate should block; no redaction. stderr={stderr}"
+        );
     }
 
     #[test]
