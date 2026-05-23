@@ -18,11 +18,15 @@ pub struct Match {
 }
 
 /// Verdict is the outcome of a scan.
+///
+/// Go's enum had a third `Warn` variant but `verdictFromMatches` never
+/// produces it — only Pass or Block. Removing it per Codex review; if the
+/// engine ever grows a distinct warn level, add it back along with the
+/// scoring rule that produces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Verdict {
     Pass,
-    Warn,
     Block,
 }
 
@@ -30,7 +34,6 @@ impl Verdict {
     pub fn as_str(&self) -> &'static str {
         match self {
             Verdict::Pass => "pass",
-            Verdict::Warn => "warn",
             Verdict::Block => "block",
         }
     }
@@ -64,8 +67,12 @@ struct RegexEntry {
 }
 
 /// Engine is the prompt injection scanner.
+///
+/// Go cached `sensitivity` (String) and `pattern_count` on the struct; in
+/// Rust those reads were never reached (threshold is the only sensitivity
+/// derivative the scanner needs, and pattern_count was only consulted in
+/// tests via `all_patterns().len()`). Dropping both per Codex review.
 pub struct Engine {
-    sensitivity: String,
     threshold: f64,
     /// AhoCorasick automaton for all literal patterns.
     ac: AhoCorasick,
@@ -73,7 +80,6 @@ pub struct Engine {
     ac_entries: Vec<LiteralEntry>,
     /// Compiled regex patterns.
     regexes: Vec<RegexEntry>,
-    pattern_count: usize,
 }
 
 impl Engine {
@@ -87,7 +93,6 @@ impl Engine {
         };
 
         let defs = all_patterns();
-        let pattern_count = defs.len();
 
         let mut ac_patterns: Vec<String> = Vec::new();
         let mut ac_entries: Vec<LiteralEntry> = Vec::new();
@@ -119,18 +124,11 @@ impl Engine {
             .expect("AhoCorasick build failed");
 
         Engine {
-            sensitivity: sensitivity.to_lowercase(),
             threshold,
             ac,
             ac_entries,
             regexes,
-            pattern_count,
         }
-    }
-
-    /// PatternCount returns the total number of detection patterns.
-    pub fn pattern_count(&self) -> usize {
-        self.pattern_count
     }
 
     /// Scan runs the detection pipeline on a text string and returns a result.
@@ -398,12 +396,8 @@ mod tests {
 
     #[test]
     fn test_engine_pattern_count() {
-        let e = Engine::new("medium");
-        assert!(
-            e.pattern_count() >= 40,
-            "expected 40+ patterns, got {}",
-            e.pattern_count()
-        );
+        let n = super::super::patterns::all_patterns().len();
+        assert!(n >= 40, "expected 40+ patterns, got {n}");
     }
 
     #[test]
@@ -492,12 +486,8 @@ mod tests {
 
     #[test]
     fn test_engine_pattern_count_html_added() {
-        let e = Engine::new("medium");
-        assert!(
-            e.pattern_count() >= 55,
-            "expected 55+ patterns, got {}",
-            e.pattern_count()
-        );
+        let n = super::super::patterns::all_patterns().len();
+        assert!(n >= 55, "expected 55+ patterns, got {n}");
     }
 
     #[test]

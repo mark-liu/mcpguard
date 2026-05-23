@@ -347,7 +347,6 @@ fn scan_result_bytes(data: &[u8], cfg: &Config, stats: &Stats) -> bool {
                     );
                 }
             }
-            _ => {}
         }
     }
     blocked

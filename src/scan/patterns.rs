@@ -25,15 +25,11 @@ impl Severity {
         }
     }
 
-    /// Returns the scoring weight for this severity level.
-    pub fn weight(&self) -> f64 {
-        match self {
-            Severity::Critical => 2.0,
-            Severity::High => 1.5,
-            Severity::Medium => 1.0,
-            Severity::Low => 0.5,
-        }
-    }
+    // Severity::weight() lived here as a precomputed scoring helper, but the
+    // engine's score() does an inline match on the string form of severity to
+    // mirror Go's severityWeight() free function. Removed per Codex review;
+    // re-add together with refactoring Match.severity from String to Severity
+    // if you want enum-typed scoring.
 }
 
 impl std::fmt::Display for Severity {
@@ -43,6 +39,10 @@ impl std::fmt::Display for Severity {
 }
 
 /// Pattern is a single detection rule.
+///
+/// Go's struct precomputed `Weight` as a cached f64, but the scoring engine
+/// calls `severity.weight()` directly per match — the cache was never read.
+/// Dropping the field keeps the struct minimal (per Codex review).
 #[derive(Debug, Clone)]
 pub struct Pattern {
     pub id: &'static str,
@@ -51,7 +51,6 @@ pub struct Pattern {
     pub pattern_type: PatternType,
     /// For literal: the lowercased match string. For regex: the regex source.
     pub value: &'static str,
-    pub weight: f64,
 }
 
 fn p(
@@ -61,14 +60,12 @@ fn p(
     pattern_type: PatternType,
     value: &'static str,
 ) -> Pattern {
-    let weight = severity.weight();
     Pattern {
         id,
         category,
         severity,
         pattern_type,
         value,
-        weight,
     }
 }
 
@@ -127,7 +124,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             "instruction-override",
             Critical,
             Regex,
-            r"(?i)ignore\s+(any|all|every)\s+(prior|previous|earlier)\s+(instructions?|prompts?|rules?)",
+            r"(?i)ignore[\t\n\f\r ]+(any|all|every)[\t\n\f\r ]+(prior|previous|earlier)[\t\n\f\r ]+(instructions?|prompts?|rules?)",
         ),
         // prompt-marker (6)
         p(
@@ -171,7 +168,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             "authority-claim",
             Critical,
             Regex,
-            r"(?i)(I\s+am|this\s+is)\s+(your|the)\s+(developer|creator|admin|administrator|owner)",
+            r"(?i)(I[\t\n\f\r ]+am|this[\t\n\f\r ]+is)[\t\n\f\r ]+(your|the)[\t\n\f\r ]+(developer|creator|admin|administrator|owner)",
         ),
         // exfil-instruction (5)
         p(
@@ -187,21 +184,21 @@ pub fn all_patterns() -> Vec<Pattern> {
             "exfil-instruction",
             Critical,
             Regex,
-            r"(?i)send\s+(all|the|this|your)\s+(the\s+)?(data|information|context|conversation)\s+(and\s+\w+\s+)?to\s+(https?://|//|[a-z0-9.-]+\.[a-z]{2,})",
+            r"(?i)send[\t\n\f\r ]+(all|the|this|your)[\t\n\f\r ]+(the[\t\n\f\r ]+)?(data|information|context|conversation)[\t\n\f\r ]+(and[\t\n\f\r ]+[0-9A-Za-z_]+[\t\n\f\r ]+)?to[\t\n\f\r ]+(https?://|//|[a-z0-9.-]+\.[a-z]{2,})",
         ),
         p(
             "ei-004",
             "exfil-instruction",
             High,
             Regex,
-            r"(?i)(fetch|load|visit|open|navigate)\s+(https?://|//)[^\s]+",
+            r"(?i)(fetch|load|visit|open|navigate)[\t\n\f\r ]+(https?://|//)[^\t\n\f\r ]+",
         ),
         p(
             "ei-005",
             "exfil-instruction",
             High,
             Regex,
-            r"!\[(track|pixel|1x1|beacon|exfil)\w*\]\(https?://[^\)]+\)",
+            r"!\[(track|pixel|1x1|beacon|exfil)[0-9A-Za-z_]*\]\(https?://[^\)]+\)",
         ),
         // output-manipulation (4)
         p(
@@ -223,14 +220,14 @@ pub fn all_patterns() -> Vec<Pattern> {
             "output-manipulation",
             High,
             Regex,
-            r"(?i)never\s+(mention|reveal|disclose|discuss)\s+(that|this|the|your)",
+            r"(?i)never[\t\n\f\r ]+(mention|reveal|disclose|discuss)[\t\n\f\r ]+(that|this|the|your)",
         ),
         p(
             "om-004",
             "output-manipulation",
             Medium,
             Regex,
-            r"(?i)(always|must|should)\s+respond\s+(with|by|using)\s+",
+            r"(?i)(always|must|should)[\t\n\f\r ]+respond[\t\n\f\r ]+(with|by|using)[\t\n\f\r ]+",
         ),
         // tool-manipulation (5)
         p(
@@ -259,14 +256,14 @@ pub fn all_patterns() -> Vec<Pattern> {
             "tool-manipulation",
             High,
             Regex,
-            "(?i)(invoke|run|call|use)\\s+(the\\s+)?(tool|function|mcp)\\s+[\"'`]",
+            r##"(?i)(invoke|run|call|use)[\t\n\f\r ]+(the[\t\n\f\r ]+)?(tool|function|mcp)[\t\n\f\r ]+["'`]"##,
         ),
         p(
             "tm-005",
             "tool-manipulation",
             Critical,
             Regex,
-            r"(?i)(call|invoke|run)\s+mcp_\w+",
+            r"(?i)(call|invoke|run)[\t\n\f\r ]+mcp_[0-9A-Za-z_]+",
         ),
         // context-hijacking (5)
         p("ch-001", "context-hijacking", Medium, Literal, "important:"),
@@ -316,14 +313,14 @@ pub fn all_patterns() -> Vec<Pattern> {
             "delimiter-injection",
             High,
             Regex,
-            r"(?i)-{3,}\s*(END|BEGIN)\s+(SYSTEM|USER|ASSISTANT)\s+(PROMPT|MESSAGE|INSTRUCTIONS?)\s*-{3,}",
+            r"(?i)-{3,}[\t\n\f\r ]*(END|BEGIN)[\t\n\f\r ]+(SYSTEM|USER|ASSISTANT)[\t\n\f\r ]+(PROMPT|MESSAGE|INSTRUCTIONS?)[\t\n\f\r ]*-{3,}",
         ),
         p(
             "di-003",
             "delimiter-injection",
             High,
             Regex,
-            r#"\{\s*"role"\s*:\s*"(system|assistant)"\s*"#,
+            r#"\{[\t\n\f\r ]*"role"[\t\n\f\r ]*:[\t\n\f\r ]*"(system|assistant)"[\t\n\f\r ]*"#,
         ),
         // encoded-injection (3)
         p(
@@ -331,7 +328,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             "encoded-injection",
             High,
             Regex,
-            r"(?i)eval\s*\(\s*atob\s*\(",
+            r"(?i)eval[\t\n\f\r ]*\([\t\n\f\r ]*atob[\t\n\f\r ]*\(",
         ),
         p(
             "enc-002",
@@ -345,7 +342,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             "encoded-injection",
             Medium,
             Regex,
-            r"(?i)String\.fromCharCode\s*\(",
+            r"(?i)String\.fromCharCode[\t\n\f\r ]*\(",
         ),
         // html-injection (5)
         p(
@@ -353,7 +350,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             "html-injection",
             Medium,
             Regex,
-            r#"(?i)\son(load|error|click|focus|mouseover|submit|toggle|animationend)\s*=\s*["']"#,
+            r#"(?i)[\t\n\f\r ]on(load|error|click|focus|mouseover|submit|toggle|animationend)[\t\n\f\r ]*=[\t\n\f\r ]*["']"#,
         ),
         p(
             "hi-002",
@@ -374,14 +371,14 @@ pub fn all_patterns() -> Vec<Pattern> {
             "html-injection",
             High,
             Regex,
-            r#"(?i)expression\s*\(\s*['"a-z(]"#,
+            r#"(?i)expression[\t\n\f\r ]*\([\t\n\f\r ]*['"a-z(]"#,
         ),
         p(
             "hi-005",
             "html-injection",
             High,
             Regex,
-            r"<!--\s*(?i)(ignore|disregard|forget)\s+(any|all|previous|your)",
+            r"<!--[\t\n\f\r ]*(?i)(ignore|disregard|forget)[\t\n\f\r ]+(any|all|previous|your)",
         ),
         // svg-injection (2)
         p(
@@ -389,14 +386,14 @@ pub fn all_patterns() -> Vec<Pattern> {
             "svg-injection",
             Medium,
             Regex,
-            r"(?i)<svg[^>]*\son\w+\s*=",
+            r"(?i)<svg[^>]*[\t\n\f\r ]on[0-9A-Za-z_]+[\t\n\f\r ]*=",
         ),
         p(
             "svg-002",
             "svg-injection",
             Medium,
             Regex,
-            r"(?i)<foreignObject[\s>]",
+            r"(?i)<foreignObject[\t\n\f\r >]",
         ),
     ]
 }
