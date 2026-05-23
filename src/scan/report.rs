@@ -1,15 +1,36 @@
 use sha2::{Digest, Sha256};
-use std::fmt::Write as FmtWrite;
 use std::io;
 
 use super::engine::Match;
 
-/// Truncate shortens s to max bytes, appending "..." when truncated.
+/// Truncate shortens s to at most `max` bytes, clamping the cut to the
+/// nearest UTF-8 char boundary ≤ max so a multibyte codepoint is never split.
+/// Returns a borrowed slice for cheap reuse; callers needing an owned String
+/// can `.to_string()` it.
+///
+/// Go's strings can be byte-sliced through a codepoint without panicking
+/// (producing invalid UTF-8); Rust's `str` slicing panics on a non-boundary.
+/// This helper bridges the gap safely — and since truncation only runs AFTER
+/// scanning (SPEC §5.4), the slightly different cut byte doesn't affect any
+/// verdict.
+pub fn truncate_at_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Convenience wrapper appending "..." when truncated. Used by
+/// `format_matches` (raw match excerpts, --show-excerpts only).
 pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max])
+        format!("{}...", truncate_at_char_boundary(s, max))
     }
 }
 
@@ -56,22 +77,9 @@ pub fn sha256_prefix(s: &str) -> String {
     hex::encode(result)[..16].to_string()
 }
 
-/// defang_text interleaves U+00B7 (middle dot) between every character of s.
-/// Only used in opt-in display paths. Disk log never stores raw OR defanged text.
-pub fn defang_text(s: &str) -> String {
-    if s.is_empty() {
-        return s.to_string();
-    }
-    let runes: Vec<char> = s.chars().collect();
-    let mut b = String::with_capacity(s.len() * 3);
-    for (i, &r) in runes.iter().enumerate() {
-        b.push(r);
-        if i < runes.len() - 1 && r != ' ' && runes[i + 1] != ' ' {
-            b.push('·');
-        }
-    }
-    b
-}
+// defang_text removed per Codex review: no CLI path wires `--unsafe-show-excerpts`,
+// so the helper had no caller. Add it back together with that flag if/when raw
+// match display is actually exposed.
 
 #[cfg(test)]
 mod tests {
@@ -96,37 +104,26 @@ mod tests {
     }
 
     #[test]
-    fn test_defang_text_empty() {
-        assert_eq!(defang_text(""), "");
-    }
-
-    #[test]
-    fn test_defang_text_interleaves() {
-        let out = defang_text("ignore");
-        // Should have dots between characters (not before/after spaces)
-        assert!(out.contains('·'));
-        // No contiguous letter runs
-        assert!(!out.contains("ign"));
-    }
-
-    #[test]
-    fn test_defang_text_spaces_not_dotted() {
-        let out = defang_text("ignore previous");
-        // Dot should not appear before/after the space
-        let chars: Vec<char> = out.chars().collect();
-        for i in 0..chars.len() {
-            if chars[i] == '·' {
-                // Dot must not be adjacent to space
-                assert!(i > 0 && chars[i - 1] != ' ');
-                assert!(i + 1 < chars.len() && chars[i + 1] != ' ');
-            }
-        }
-    }
-
-    #[test]
     fn test_truncate() {
         assert_eq!(truncate("hello world", 5), "hello...");
         assert_eq!(truncate("hello", 5), "hello");
         assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    // Regression (Codex finding #4): truncate must not panic when `max` lands
+    // inside a multibyte codepoint. --show-excerpts in the hook calls this
+    // with width 80 on attacker-controlled bytes; a tag-range/emoji match
+    // whose boundary lies mid-codepoint would have panicked the hook.
+    #[test]
+    fn test_truncate_multibyte_boundary() {
+        // "abc🦀def" — emoji is 4 bytes; cutting at byte 5 lands mid-emoji.
+        let s = "abc🦀def";
+        let out = truncate(s, 5);
+        // Boundary-safe: clamps to 3 (after "abc") and appends "...".
+        assert_eq!(out, "abc...");
+        // Returned string is valid UTF-8 (Rust requires this; this is the
+        // panic prevention — if the helper byte-sliced through the emoji
+        // it would have panicked before we got here).
+        assert!(out.is_char_boundary(out.len()));
     }
 }

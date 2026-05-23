@@ -138,7 +138,8 @@ fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
         let _ = writeln!(
             w,
             "{:<25} {:<7} {:<6.1} {:<7} {}",
-            e.timestamp.format("2006-01-02T15:04:05Z"),
+            e.timestamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             e.verdict,
             e.score,
             e.num_matches,
@@ -416,5 +417,39 @@ mod tests {
         assert!(parse_duration("not-a-duration").is_none());
         assert!(parse_duration("").is_none());
         assert!(parse_duration("5x").is_none());
+    }
+
+    // Regression (Codex finding #3): the audit table previously formatted
+    // every event timestamp with `e.timestamp.format("2006-01-02T15:04:05Z")`,
+    // which chrono treats as a literal — every row rendered the string
+    // "2006-01-02T15:04:05Z" regardless of the real ts. Fixed by using
+    // `to_rfc3339_opts`. This test catches a re-regression by asserting the
+    // rendered table contains the fixture's actual year and NOT the Go
+    // layout literal "2006".
+    #[test]
+    fn test_table_renders_real_timestamp_not_go_layout() {
+        use chrono::TimeZone;
+        let event = audit::Event {
+            timestamp: chrono::Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap(),
+            tool_name: "mcp__x__y".to_string(),
+            sensitivity: "medium".to_string(),
+            mode: "block".to_string(),
+            verdict: "block".to_string(),
+            score: 2.0,
+            num_matches: 1,
+            redacted: true,
+            matches: vec![],
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        print_event_table(&mut buf, &[event]);
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("2026-05-23"),
+            "table must show the fixture's real date, got:\n{out}"
+        );
+        assert!(
+            !out.contains("2006-01-02"),
+            "table must NOT contain the Go layout literal, got:\n{out}"
+        );
     }
 }

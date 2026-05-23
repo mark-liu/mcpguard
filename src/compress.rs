@@ -31,6 +31,14 @@ impl Config {
 }
 
 /// Stats tracks compression metrics.
+///
+/// Test-only diagnostic: tests use these fields to assert byte counts.
+/// The proxy tracks bytes_in/bytes_out via atomics in `proxy::Stats` for the
+/// `--stats` output, so it ignores this struct's fields. `#[allow(dead_code)]`
+/// keeps the struct around for tests without triggering the dead-field warning
+/// on `cargo build --release` (per Codex review — alternative was to thread
+/// the fields into proxy::Stats, which would duplicate the byte counters).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Stats {
     pub original_size: usize,
@@ -144,12 +152,15 @@ fn process_string(s: String, cfg: &Config, field_name: &str) -> String {
         return s;
     }
 
-    let truncated_len = s.len() - cfg.max_content_length;
-    format!(
-        "{}...[truncated {} chars]",
-        &s[..cfg.max_content_length],
-        truncated_len
-    )
+    // UTF-8-safe byte slicing: cut at the nearest char boundary ≤ max so
+    // multibyte codepoints (emoji, CJK) at the boundary don't panic. The Go
+    // source byte-slices freely; Rust would panic on a non-boundary index.
+    // The truncated_len count reflects what was actually dropped after
+    // boundary clamp (slightly more bytes than max_content_length when the
+    // boundary is mid-codepoint), so the printed count remains accurate.
+    let kept = crate::scan::report::truncate_at_char_boundary(&s, cfg.max_content_length);
+    let truncated_len = s.len() - kept.len();
+    format!("{}...[truncated {} chars]", kept, truncated_len)
 }
 
 /// isMessageField returns true if the field name looks like it holds messages.
@@ -160,17 +171,8 @@ fn is_message_field(name: &str) -> bool {
     )
 }
 
-/// Returns the default content fields (matching Go's DefaultContentFields).
-pub fn default_content_fields() -> Vec<&'static str> {
-    vec![
-        "content",
-        "text",
-        "body",
-        "message",
-        "description",
-        "caption",
-    ]
-}
+// default_content_fields lives in `crate::config` — Codex flagged this as a
+// duplicate. Use config::default_content_fields() if you need it.
 
 #[cfg(test)]
 mod tests {
@@ -276,5 +278,38 @@ mod tests {
             "embedded content should be truncated: {}",
             content.len()
         );
+    }
+
+    // Regression (Codex finding #1): truncate must not panic when
+    // max_content_length lands inside a multibyte codepoint. Go byte-slices
+    // freely; Rust `&s[..n]` panics on a non-char-boundary index.
+    #[test]
+    fn test_truncate_panics_on_multibyte_boundary() {
+        // "abc🦀def" — emoji is 4 bytes (F0 9F A6 80); cutting at byte 5 lands
+        // mid-emoji. Previous code panicked here.
+        let input = r#"{"content":"abc🦀def"}"#.as_bytes();
+        let cfg = mk_cfg(5, &[], &["content"], 0, 0);
+        let (out, _) = compress(input, &cfg);
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let content = parsed["content"].as_str().unwrap();
+        // Truncated at a valid char boundary ≤ 5 (here: 3, after "abc") + suffix.
+        assert!(
+            content.starts_with("abc"),
+            "expected 'abc' prefix, got: {content:?}"
+        );
+        assert!(
+            content.contains("...[truncated"),
+            "expected truncation marker, got: {content:?}"
+        );
+    }
+
+    #[test]
+    fn test_truncate_cjk_boundary_safe() {
+        // 工 = 3 bytes (E5 B7 A5). max=4 → falls mid-codepoint of second char.
+        let input = "{\"content\":\"工具書\"}".as_bytes();
+        let cfg = mk_cfg(4, &[], &["content"], 0, 0);
+        let (out, _) = compress(input, &cfg);
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert!(parsed["content"].as_str().unwrap().starts_with("工"));
     }
 }
