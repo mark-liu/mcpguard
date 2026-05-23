@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::thread;
 
 use serde_json::Value;
@@ -197,10 +197,7 @@ fn read_capped_line<R: BufRead>(r: &mut R, buf: &mut Vec<u8>) -> io::Result<usiz
                 let consumed = available.len();
                 r.consume(consumed);
                 if buf.len() > MAX_LINE_BYTES {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "line exceeds 10MB cap",
-                    ));
+                    return Err(io::Error::other("line exceeds 10MB cap"));
                 }
             }
         }
@@ -254,33 +251,31 @@ pub fn process_message(
 
     // Scan FIRST: scan the original uncompressed data so truncation
     // cannot hide injection payloads in the tail (security invariant).
-    if !compress_only {
-        if scan_result_bytes(&processed, cfg, stats) {
-            // Injection detected and action is "block" — return a JSON-RPC error.
-            let mut err_resp = serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32001,
-                    "message": "mcpguard: request blocked due to detected prompt injection"
-                }
-            });
-            if let Some(id) = msg.get("id") {
-                err_resp["id"] = id.clone();
+    if !compress_only && scan_result_bytes(&processed, cfg, stats) {
+        // Injection detected and action is "block" — return a JSON-RPC error.
+        let mut err_resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "error": {
+                "code": -32001,
+                "message": "mcpguard: request blocked due to detected prompt injection"
             }
-            let out = match serde_json::to_vec(&err_resp) {
-                Ok(b) => b,
-                Err(_) => {
-                    stats
-                        .bytes_out
-                        .fetch_add(line.len() as i64, Ordering::Relaxed);
-                    return line.to_vec();
-                }
-            };
-            stats
-                .bytes_out
-                .fetch_add(out.len() as i64, Ordering::Relaxed);
-            return out;
+        });
+        if let Some(id) = msg.get("id") {
+            err_resp["id"] = id.clone();
         }
+        let out = match serde_json::to_vec(&err_resp) {
+            Ok(b) => b,
+            Err(_) => {
+                stats
+                    .bytes_out
+                    .fetch_add(line.len() as i64, Ordering::Relaxed);
+                return line.to_vec();
+            }
+        };
+        stats
+            .bytes_out
+            .fetch_add(out.len() as i64, Ordering::Relaxed);
+        return out;
     }
 
     // Compress AFTER scan: safe to truncate now that scanning is done.

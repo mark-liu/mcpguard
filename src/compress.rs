@@ -131,12 +131,13 @@ fn process_array(mut arr: Vec<Value>, cfg: &Config, field_name: &str) -> Value {
 /// process_string handles stringified JSON and truncates content fields.
 fn process_string(s: String, cfg: &Config, field_name: &str) -> String {
     // If the string looks like embedded JSON, parse, compress, and re-stringify.
-    if s.len() > 1 && (s.starts_with('{') || s.starts_with('[')) {
-        if let Ok(inner) = serde_json::from_str::<Value>(&s) {
-            let inner = process_value(inner, cfg, "");
-            if let Ok(out) = serde_json::to_string(&inner) {
-                return out;
-            }
+    if s.len() > 1
+        && (s.starts_with('{') || s.starts_with('['))
+        && let Ok(inner) = serde_json::from_str::<Value>(&s)
+    {
+        let inner = process_value(inner, cfg, "");
+        if let Ok(out) = serde_json::to_string(&inner) {
+            return out;
         }
     }
 

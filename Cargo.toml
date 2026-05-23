@@ -5,6 +5,7 @@ edition = "2024"
 description = "Transparent MCP stdio proxy — scans tool results for prompt injection and compresses payloads before they reach the LLM"
 license = "MIT OR GPL-3.0"
 repository = "https://github.com/mark-liu/mcpguard"
+homepage = "https://github.com/mark-liu/mcpguard"
 keywords = ["mcp", "security", "prompt-injection", "llm", "proxy"]
 categories = ["command-line-utilities"]
 

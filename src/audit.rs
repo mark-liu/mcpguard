@@ -142,20 +142,20 @@ pub fn read(path: &PathBuf, f: &Filter) -> Result<Vec<Event>> {
             Ok(e) => e,
             Err(_) => continue, // skip malformed lines silently
         };
-        if let Some(since) = f.since {
-            if e.timestamp < since {
-                continue;
-            }
+        if let Some(since) = f.since
+            && e.timestamp < since
+        {
+            continue;
         }
-        if let Some(ref v) = f.verdict {
-            if &e.verdict != v {
-                continue;
-            }
+        if let Some(ref v) = f.verdict
+            && &e.verdict != v
+        {
+            continue;
         }
-        if let Some(ref tool) = f.tool {
-            if !e.tool_name.contains(tool.as_str()) {
-                continue;
-            }
+        if let Some(ref tool) = f.tool
+            && !e.tool_name.contains(tool.as_str())
+        {
+            continue;
         }
         out.push(e);
     }

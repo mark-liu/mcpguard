@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::scan::patterns::{pattern_by_id, PatternType};
+use crate::scan::patterns::{PatternType, pattern_by_id};
 
 /// run_explain prints the definition of one pattern_id.
 /// Returns exit code: 0 = success, 1 = error.
@@ -49,15 +49,15 @@ pub fn rationale_for(category: &str) -> Option<&'static str> {
         "authority-claim" => Some(
             "false claims of operator authority (e.g. 'I am your developer', 'admin override', 'DAN mode')",
         ),
-        "exfil-instruction" => Some(
-            "phrases that direct the model to send data, fetch URLs, or embed tracking pixels",
-        ),
-        "tool-manipulation" => Some(
-            "phrases that direct the model to invoke specific MCP tools or function calls",
-        ),
-        "context-hijacking" => Some(
-            "high-attention markers used to elevate attacker text to instruction status",
-        ),
+        "exfil-instruction" => {
+            Some("phrases that direct the model to send data, fetch URLs, or embed tracking pixels")
+        }
+        "tool-manipulation" => {
+            Some("phrases that direct the model to invoke specific MCP tools or function calls")
+        }
+        "context-hijacking" => {
+            Some("high-attention markers used to elevate attacker text to instruction status")
+        }
         "output-manipulation" => Some(
             "phrases that constrain the model's response shape ('respond only with', 'do not mention')",
         ),
@@ -67,9 +67,7 @@ pub fn rationale_for(category: &str) -> Option<&'static str> {
         "encoded-injection" => {
             Some("code constructs that execute base64/hex-decoded payloads at runtime")
         }
-        "delimiter-injection" => {
-            Some("fake END/BEGIN PROMPT markers or forged role JSON blocks")
-        }
+        "delimiter-injection" => Some("fake END/BEGIN PROMPT markers or forged role JSON blocks"),
         _ => None,
     }
 }

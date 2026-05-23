@@ -5,7 +5,7 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use super::patterns::{all_patterns, Pattern, PatternType};
+use super::patterns::{Pattern, PatternType, all_patterns};
 
 /// Match records a single pattern hit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,8 +274,8 @@ fn dedup(matches: Vec<Match>) -> Vec<Match> {
 
     for m in matches {
         let k = (m.pattern_id.clone(), m.offset);
-        if !seen.contains_key(&k) {
-            seen.insert(k, true);
+        if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(k) {
+            e.insert(true);
             out.push(m);
         }
     }
@@ -287,19 +287,17 @@ fn dedup(matches: Vec<Match>) -> Vec<Match> {
 /// The Unicode tag range U+E0001–U+E007F is PRESERVED so the uo-004 detector can still fire.
 pub fn strip_invisible(s: &str) -> String {
     s.chars()
-        .filter_map(|c| {
-            match c {
-                // Explicit zero-width / BOM characters
-                '\u{200B}' | '\u{200C}' | '\u{200D}' | '﻿' => None,
-                // Preserve tag range U+E0001..U+E007F (needed for uo-004)
-                '\u{E0001}'..='\u{E007F}' => Some(c),
-                // Keep common whitespace
-                '\n' | '\r' | '\t' | ' ' => Some(c),
-                // Remove Unicode Cf (format) category characters
-                c if is_cf(c) => None,
-                // Keep everything else
-                _ => Some(c),
-            }
+        .filter(|&c| match c {
+            // Explicit zero-width / BOM characters — drop
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => false,
+            // Preserve tag range U+E0001..U+E007F (needed for uo-004)
+            '\u{E0001}'..='\u{E007F}' => true,
+            // Keep common whitespace
+            '\n' | '\r' | '\t' | ' ' => true,
+            // Drop Unicode Cf (format) category characters
+            c if is_cf(c) => false,
+            // Keep everything else
+            _ => true,
         })
         .collect()
 }
@@ -310,7 +308,7 @@ pub fn strip_invisible(s: &str) -> String {
 /// the real category across Unicode versions and leaves some Cf chars
 /// un-stripped, which is a detection-evasion gap (SPEC §5.3).
 fn is_cf(c: char) -> bool {
-    use unicode_general_category::{get_general_category, GeneralCategory};
+    use unicode_general_category::{GeneralCategory, get_general_category};
     get_general_category(c) == GeneralCategory::Format
 }
 
@@ -492,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_all_regex_patterns_compile() {
-        use super::super::patterns::{all_patterns, PatternType};
+        use super::super::patterns::{PatternType, all_patterns};
         for p in all_patterns() {
             if p.pattern_type == PatternType::Regex {
                 let result = regex::Regex::new(p.value);

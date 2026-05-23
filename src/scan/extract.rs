@@ -24,10 +24,8 @@ pub fn extract_strings(data: &[u8]) -> Vec<String> {
 /// still catching short injection markers like "[INST]" (6) and "<<sys>>" (7).
 pub fn walk_strings(v: &Value, out: &mut Vec<String>) {
     match v {
-        Value::String(s) => {
-            if s.len() > 3 {
-                out.push(s.clone());
-            }
+        Value::String(s) if s.len() > 3 => {
+            out.push(s.clone());
         }
         Value::Object(map) => {
             for (k, val) in map {
