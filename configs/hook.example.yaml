@@ -1,0 +1,56 @@
+# mcpguard hook config -- example
+#
+# Copy to ~/.config/mcpguard/hook.yaml and the `mcpguard hook` PostToolUse
+# scanner picks it up automatically. An explicit `--config <path>` overrides
+# the default location.
+#
+# IMPORTANT: in hook mode this file supplies `scan.allow` and NOTHING else.
+# `scan.sensitivity` and `scan.action` are read from CLI flags only and are
+# ignored here (with a warning on stderr if you set them). The rule is that a
+# config file may make scanning stricter, never looser: otherwise anything able
+# to write this path could silently downgrade a `--mode block` hook to `warn`,
+# which would make a convenience file into a control plane for your security
+# posture. Flags live in settings.json, which is version-controlled; this is not.
+#
+# If this file is missing, unreadable, or invalid, the hook does NOT stop
+# scanning -- it logs and continues with an empty allowlist (fail closed).
+# Skipping the scan would emit no redaction and pass the payload through
+# completely unscanned, which is far worse than losing the suppression list.
+#
+# (The proxy mode -- `mcpguard --config x.yaml <server>` -- does honour
+# sensitivity and action from its config; this restriction is hook-only.)
+
+scan:
+  # scan.allow drops known-benign matches BEFORE scoring, so an allowed match
+  # contributes nothing to the score, the category-diversity bonus, or the
+  # critical short-circuit. It never suppresses anything else in the payload:
+  # a real injection sitting next to an allowed match still blocks.
+  allow:
+
+    # Host suffixes that should not count as exfil destinations.
+    #
+    # Rationale: the ei-00x detectors are content-shaped and have no notion of
+    # where a URL points, so first-party vendor boilerplate ("Visit
+    # https://<your-grafana>/alert-groups/...") is byte-identical in shape to
+    # an exfil instruction. List hosts you actually control.
+    #
+    # Matching is on the URL's REAL host: userinfo before '@' is discarded and
+    # ports are stripped, so "https://grafana.net@evil.tld/x" is NOT allowed.
+    # Suffix matching is label-aware, so "grafana.net" allows
+    # "twinstake.grafana.net" but not "grafana.net.evil.tld".
+    hosts: []
+    # hosts:
+    #   - grafana.net
+    #   - incident.io
+
+    # Pattern ids to disable outright. Validated against the pattern table at
+    # load time, so a typo fails loudly instead of silently disabling nothing.
+    #
+    # ch-002 is the usual candidate in an ops environment: it is the bare
+    # case-insensitive literal "critical:", which in alert channels, incident
+    # docs and priority fields is a severity label rather than an attention
+    # hijack. Genuine hijack framing is still caught by io-001 (Critical
+    # severity, short-circuits to block) regardless of what is listed here.
+    patterns: []
+    # patterns:
+    #   - ch-002

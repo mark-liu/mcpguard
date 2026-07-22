@@ -87,21 +87,68 @@ compress:
 scan:
   sensitivity: medium               # low (threshold=2.0), medium (1.0), high (0.5)
   action: warn                      # warn (log to stderr) or block
+  allow:                            # drop known-benign matches before scoring
+    hosts: []                       # host suffixes that are not exfil destinations
+    patterns: []                    # pattern ids to disable, e.g. ch-002
 ```
 
-See `configs/` for Discord and Telegram examples.
+See `configs/` for Discord and Telegram examples, and `configs/hook.example.yaml`
+for the PostToolUse hook.
 
 ### Sensitivity levels
 
-- **low** (threshold 2.0): only fires on multiple high-severity matches or critical patterns
-- **medium** (threshold 1.0): fires on a single high-severity match or multiple medium matches
-- **high** (threshold 0.5): fires on any single medium-severity match
+Scoring: each match contributes its severity weight (critical 2.0, high 1.5,
+medium 1.0, low 0.5), plus a **+0.25 bonus per additional category** present.
+A payload blocks when the total reaches the threshold.
+
+- **low** (threshold 2.0): needs a critical match, two highs, or a broader mix
+- **medium** (threshold 1.0): **any single match of medium severity or above blocks on its own**
+- **high** (threshold 0.5): any single match of any severity blocks
+
+Be deliberate about `medium`: because the medium weight (1.0) equals the medium
+threshold (1.0), **54 of the 55 patterns block alone** at that setting. That is
+the intended posture for a fail-closed scanner, but it means a single
+unremarkable literal in a large payload suppresses the whole tool result, so
+expect to use `scan.allow` to tune out benign sources rather than reaching for a
+lower sensitivity.
 
 Critical-severity patterns (e.g. "ignore previous instructions", `<|im_start|>system`) trigger an immediate block regardless of threshold.
 
+### Suppressing false positives (`scan.allow`)
+
+Every detector is content-shaped: none of them know who authored the text or
+where a URL points. First-party vendor boilerplate -- a monitoring alert linking
+to your own dashboard -- is byte-identical in shape to an exfil instruction.
+Without an escape hatch the only knobs are the global threshold and
+warn-vs-block, so operators end up routing around the scanner entirely, which is
+strictly worse for coverage than tuning it.
+
+```yaml
+scan:
+  allow:
+    hosts:
+      - grafana.net      # also allows twinstake.grafana.net, NOT grafana.net.evil.tld
+    patterns:
+      - ch-002           # the bare literal "critical:" -- a severity label in ops corpora
+```
+
+Semantics, deliberately narrow:
+
+- Suppression happens **after matching, before scoring**, so an allowed match
+  contributes nothing to the score, the category bonus, or the critical
+  short-circuit. It is as if that detector had not fired.
+- It never suppresses anything else in the payload. A real injection sitting
+  beside an allowed match still blocks.
+- `hosts` matches the URL's **real host**: userinfo before `@` is discarded and
+  ports are stripped, so `https://grafana.net@evil.tld/x` is *not* allowed.
+  Suffix matching is label-aware. A URL whose host cannot be parsed is never
+  allowed (fail closed).
+- `patterns` entries are validated against the pattern table at load time, so a
+  typo fails loudly instead of silently disabling nothing.
+
 ## Detection patterns
 
-48 patterns across 10 categories, ported from the [webguard-mcp](https://github.com/mark-liu/webguard-mcp) pattern engine and extended with MCP-specific vectors:
+55 patterns across 12 categories, ported from the [webguard-mcp](https://github.com/mark-liu/webguard-mcp) pattern engine and extended with MCP-specific vectors:
 
 | Category | Patterns | Examples |
 |----------|----------|----------|

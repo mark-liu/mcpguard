@@ -35,6 +35,36 @@ pub struct ScanConfig {
     /// warn, block
     #[serde(default = "default_action")]
     pub action: String,
+    /// Matches to drop before scoring. See AllowConfig.
+    #[serde(default)]
+    pub allow: AllowConfig,
+}
+
+/// AllowConfig suppresses known-benign matches before they reach scoring.
+///
+/// Motivation: every detector here is content-shaped, with no notion of who
+/// authored the text or where a URL points. First-party vendor boilerplate --
+/// a Grafana alert linking to your own Grafana -- is byte-identical in shape
+/// to an exfil instruction. Without an escape hatch the only knobs are the
+/// global threshold and warn-vs-block, so operators route around the guard
+/// instead of tuning it, which is strictly worse for coverage.
+///
+/// This is deliberately a SUPPRESSION list, not a trust system: entries drop
+/// matches before scoring, they never lower the threshold or bypass the
+/// critical short-circuit for anything else in the payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AllowConfig {
+    /// Host suffixes whose URLs should not count as exfil destinations, e.g.
+    /// "grafana.net" also allows "twinstake.grafana.net". Matching is on the
+    /// URL's real host: userinfo before '@' is discarded and ports are
+    /// stripped, so "https://grafana.net@evil.tld/x" is NOT allowed.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    /// Pattern ids to disable outright, e.g. "ch-002". Validated against the
+    /// pattern table at load time so a typo fails loudly instead of silently
+    /// disabling nothing.
+    #[serde(default)]
+    pub patterns: Vec<String>,
 }
 
 fn default_sensitivity() -> String {
@@ -50,6 +80,7 @@ impl Default for ScanConfig {
         ScanConfig {
             sensitivity: "medium".to_string(),
             action: "warn".to_string(),
+            allow: AllowConfig::default(),
         }
     }
 }
@@ -111,6 +142,31 @@ pub fn load(path: &str) -> Result<Config> {
         ),
     }
 
+    // Validate allowlisted pattern ids against the real pattern table. A typo
+    // here would silently disable nothing, which is the same failure mode the
+    // action/sensitivity checks above exist to prevent -- except worse,
+    // because the operator believes a noisy detector is off when it is not.
+    let known: std::collections::HashSet<&str> = crate::scan::patterns::all_patterns()
+        .iter()
+        .map(|p| p.id)
+        .collect();
+    for id in &cfg.scan.allow.patterns {
+        if !known.contains(id.as_str()) {
+            bail!(
+                "unknown pattern id {:?} in scan.allow.patterns: no such detector",
+                id
+            );
+        }
+    }
+
+    // An empty or whitespace-only host entry would suffix-match every URL and
+    // silently disable ei-00x wholesale. Reject it rather than fail open.
+    for h in &cfg.scan.allow.hosts {
+        if h.trim().is_empty() {
+            bail!("empty host in scan.allow.hosts: would match every URL");
+        }
+    }
+
     Ok(cfg)
 }
 
@@ -165,5 +221,43 @@ mod tests {
         let cfg = load(f.path().to_str().unwrap()).unwrap();
         assert!(!cfg.compress.content_fields.is_empty());
         assert!(cfg.compress.content_fields.contains(&"content".to_string()));
+    }
+
+    #[test]
+    fn test_load_allow_defaults_empty() {
+        let f = write_cfg("scan:\n  sensitivity: medium\n");
+        let cfg = load(f.path().to_str().unwrap()).unwrap();
+        assert!(cfg.scan.allow.hosts.is_empty());
+        assert!(cfg.scan.allow.patterns.is_empty());
+    }
+
+    #[test]
+    fn test_load_allow_valid() {
+        let f = write_cfg(
+            "scan:\n  sensitivity: medium\n  allow:\n    hosts:\n      - grafana.net\n    patterns:\n      - ch-002\n",
+        );
+        let cfg = load(f.path().to_str().unwrap()).unwrap();
+        assert_eq!(cfg.scan.allow.hosts, vec!["grafana.net".to_string()]);
+        assert_eq!(cfg.scan.allow.patterns, vec!["ch-002".to_string()]);
+    }
+
+    #[test]
+    fn test_load_allow_rejects_unknown_pattern_id() {
+        // A typo must fail loudly: silently disabling nothing is the worst
+        // outcome, because the operator believes a noisy detector is off.
+        let f =
+            write_cfg("scan:\n  sensitivity: medium\n  allow:\n    patterns:\n      - ch-999\n");
+        let err = load(f.path().to_str().unwrap()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ch-999"),
+            "error should name the bad id, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_load_allow_rejects_empty_host() {
+        // An empty host would suffix-match every URL and disable ei-00x.
+        let f = write_cfg("scan:\n  sensitivity: medium\n  allow:\n    hosts:\n      - \"  \"\n");
+        assert!(load(f.path().to_str().unwrap()).is_err());
     }
 }

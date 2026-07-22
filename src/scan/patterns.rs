@@ -73,7 +73,7 @@ fn p(
 /// 55 patterns total.
 pub fn all_patterns() -> Vec<Pattern> {
     use PatternType::{Literal, Regex};
-    use Severity::{Critical, High, Medium};
+    use Severity::{Critical, High, Low, Medium};
 
     vec![
         // instruction-override (7)
@@ -189,7 +189,13 @@ pub fn all_patterns() -> Vec<Pattern> {
         p(
             "ei-004",
             "exfil-instruction",
-            High,
+            // Demoted High -> Medium 2026-07-22: the pattern has no notion of
+            // destination trust, so first-party vendor boilerplate ("Visit
+            // https://<our-grafana>/...") scored identically to an exfil URL.
+            // ei-004 is 148 of 229 matches in the field audit log. Pair this
+            // with scan.allow.hosts to actually silence first-party links --
+            // at the medium threshold (1.0) a lone Medium match still blocks.
+            Medium,
             Regex,
             r"(?i)(fetch|load|visit|open|navigate)[\t\n\f\r ]+(https?://|//)[^\t\n\f\r ]+",
         ),
@@ -267,7 +273,15 @@ pub fn all_patterns() -> Vec<Pattern> {
         ),
         // context-hijacking (5)
         p("ch-001", "context-hijacking", Medium, Literal, "important:"),
-        p("ch-002", "context-hijacking", Medium, Literal, "critical:"),
+        // Demoted Medium -> Low 2026-07-22. As a bare case-insensitive literal
+        // at Medium (1.0) this blocked any payload containing "critical:" on a
+        // SINGLE match, because the medium threshold is also 1.0 -- e.g.
+        // "Disk usage Critical: 91% on node-7". In an ops corpus this is a
+        // severity label, not an attention hijack; genuine hijack framing is
+        // caught by io-001 (Critical, short-circuits to block).
+        // NOTE: ch-001 "important:" and ch-003 "override:" share this defect
+        // and are deliberately left alone pending a separate decision.
+        p("ch-002", "context-hijacking", Low, Literal, "critical:"),
         p("ch-003", "context-hijacking", Medium, Literal, "override:"),
         p("ch-004", "context-hijacking", High, Literal, "<system>"),
         p("ch-005", "context-hijacking", High, Literal, "</system>"),
