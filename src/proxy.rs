@@ -310,7 +310,10 @@ pub fn process_message(
 fn scan_result_bytes(data: &[u8], cfg: &Config, stats: &Stats) -> bool {
     let mut blocked = false;
     let texts = extract_strings(data);
-    let engine = scan::engine::Engine::new(&cfg.scan.sensitivity);
+    let engine = scan::engine::Engine::with_allow(
+        &cfg.scan.sensitivity,
+        scan::engine::Allow::new(&cfg.scan.allow.hosts, &cfg.scan.allow.patterns),
+    );
 
     for text in &texts {
         let result = engine.scan(text);
@@ -442,6 +445,7 @@ mod tests {
             scan: ScanConfig {
                 sensitivity: "medium".into(),
                 action: action.into(),
+                allow: Default::default(),
             },
         }
     }
@@ -506,6 +510,7 @@ mod tests {
             scan: ScanConfig {
                 sensitivity: "high".into(),
                 action: "block".into(),
+                allow: Default::default(),
             },
             ..cfg
         };
@@ -536,6 +541,7 @@ mod tests {
             scan: ScanConfig {
                 sensitivity: "high".into(),
                 action: "block".into(),
+                allow: Default::default(),
             },
             compress: CompressConfig::default(),
         };
