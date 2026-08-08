@@ -166,10 +166,11 @@ fn first_url_host(s: &str) -> Option<String> {
 
     // Strip port, but keep IPv6 bracket literals intact.
     let host = if hostport.starts_with('[') {
-        match hostport.find(']') {
-            Some(i) => &hostport[..=i],
-            None => return None,
-        }
+        // `?` rather than a match: clippy::question_mark became an error here
+        // under CI's clippy 1.97. Semantics are unchanged -- an unterminated
+        // IPv6 literal still yields None, which fails closed.
+        let close = hostport.find(']')?;
+        &hostport[..=close]
     } else {
         match hostport.find(':') {
             Some(i) => &hostport[..i],
