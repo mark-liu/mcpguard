@@ -1,6 +1,6 @@
 [package]
 name = "mcpguard"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Transparent MCP stdio proxy — scans tool results for prompt injection and compresses payloads before they reach the LLM"
 license = "MIT OR GPL-3.0"
