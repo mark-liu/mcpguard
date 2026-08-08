@@ -7,7 +7,10 @@ mod scan;
 
 use std::process;
 
-const VERSION: &str = "0.2.0";
+// Sourced from Cargo.toml so a release bump cannot leave the binary
+// self-reporting a stale number. v0.2.1 shipped announcing "0.2.0" because this
+// was hand-maintained and the release bump only touched Cargo.toml.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
