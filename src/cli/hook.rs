@@ -127,13 +127,28 @@ pub fn run_hook_path(
                 let ps = p.to_string_lossy().to_string();
                 match crate::config::load(&ps) {
                     Ok(c) => {
-                        // Warn only when the ignored keys would actually have
-                        // changed behaviour. This stderr is emitted on every
-                        // MCP tool call, so warning whenever the keys are
-                        // merely present would spam the transcript for anyone
-                        // who reasonably wrote `action: block` to match their
-                        // flags. Silence when the file agrees with reality.
-                        if c.scan.sensitivity != sensitivity || c.scan.action != mode {
+                        // Warn only when the ignored keys are ACTUALLY PRESENT in
+                        // the file AND would have changed behaviour. This stderr
+                        // is emitted on every MCP tool call, so warning whenever
+                        // the keys are merely present would spam the transcript
+                        // for anyone who reasonably wrote `action: block` to match
+                        // their flags. Silence when the file agrees with reality.
+                        //
+                        // The presence check is load-bearing, not belt-and-braces:
+                        // scan.action defaults to "warn" while every hook entry
+                        // runs --mode block, so a config that omits both keys
+                        // entirely still fails the value comparison. Before this,
+                        // the canonical minimal allowlist file (scan.allow only)
+                        // warned on every single MCP call.
+                        let keys_present = std::fs::read_to_string(&p)
+                            .ok()
+                            .and_then(|s| serde_yaml::from_str::<serde_yaml::Value>(&s).ok())
+                            .and_then(|v| v.get("scan").cloned())
+                            .map(|s| s.get("sensitivity").is_some() || s.get("action").is_some())
+                            .unwrap_or(false);
+                        if keys_present
+                            && (c.scan.sensitivity != sensitivity || c.scan.action != mode)
+                        {
                             let _ = writeln!(
                                 stderr,
                                 "mcpguard hook: {ps}: scan.sensitivity/scan.action are ignored in \
@@ -811,6 +826,33 @@ mod tests {
         assert!(
             stderr.contains("ignored in hook mode"),
             "operator should be told the knobs were ignored: {stderr}"
+        );
+    }
+
+    /// The canonical minimal hook config sets scan.allow and nothing else. It
+    /// must be silent: scan.action defaults to "warn" while every hook entry
+    /// runs --mode block, so a pure value comparison warns on a file that never
+    /// mentions the key. That fired on every MCP tool call until 2026-08-08.
+    #[test]
+    fn test_allow_only_config_is_silent() {
+        let dir = TempDir::new().unwrap();
+        let cfg = write_tmp(
+            &dir,
+            "allow-only.yaml",
+            "scan:\n  allow:\n    hosts: []\n    patterns:\n      - ch-001\n",
+        );
+        let input = make_envelope(
+            "mcp__gsuite__get_gmail_message_content",
+            "Important: seats are limited. Important: this invitation is not transferable.",
+        );
+        let (_, stdout, stderr) = run_hook_test(&["--config", &cfg, "--mode", "block"], &input);
+        assert!(
+            !stderr.contains("ignored in hook mode"),
+            "allow-only config must not warn: {stderr}"
+        );
+        assert!(
+            stdout.is_empty(),
+            "allowlisted ch-001 must not redact: {stdout}"
         );
     }
 
