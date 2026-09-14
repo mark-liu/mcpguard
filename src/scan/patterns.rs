@@ -70,7 +70,7 @@ fn p(
 }
 
 /// Returns the full set of detection patterns, ported from Go mcpguard patterns.go.
-/// 55 patterns total.
+/// 57 patterns total.
 pub fn all_patterns() -> Vec<Pattern> {
     use PatternType::{Literal, Regex};
     use Severity::{Critical, High, Low, Medium};
@@ -170,7 +170,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             Regex,
             r"(?i)(I[\t\n\f\r ]+am|this[\t\n\f\r ]+is)[\t\n\f\r ]+(your|the)[\t\n\f\r ]+(developer|creator|admin|administrator|owner)",
         ),
-        // exfil-instruction (5)
+        // exfil-instruction (7)
         p(
             "ei-001",
             "exfil-instruction",
@@ -186,18 +186,40 @@ pub fn all_patterns() -> Vec<Pattern> {
             Regex,
             r"(?i)send[\t\n\f\r ]+(all|the|this|your)[\t\n\f\r ]+(the[\t\n\f\r ]+)?(data|information|context|conversation)[\t\n\f\r ]+(and[\t\n\f\r ]+[0-9A-Za-z_]+[\t\n\f\r ]+)?to[\t\n\f\r ]+(https?://|//|[a-z0-9.-]+\.[a-z]{2,})",
         ),
+        // ei-004/006/007 split 2026-09-14. An attacker's static URL cannot carry
+        // the victim's data, so URL exfil needs the model to BUILD the URL: a
+        // template slot (ei-004), or a prose "append the key to the URL" (ei-007).
+        // A plain "Visit <url>" is at most a beacon; in a 15.8k-message Slack
+        // sample all 299 verb+URL hits were navigational (grafana/incident.io
+        // footers) with zero slots, and one lone Medium redacted whole reads.
+        // Loopback/private/link-local/metadata hosts stay Medium with no slot:
+        // a fixed URL there is SSRF or credential discovery, not navigation.
         p(
             "ei-004",
             "exfil-instruction",
-            // Demoted High -> Medium 2026-07-22: the pattern has no notion of
-            // destination trust, so first-party vendor boilerplate ("Visit
-            // https://<our-grafana>/...") scored identically to an exfil URL.
-            // ei-004 is 148 of 229 matches in the field audit log. Pair this
-            // with scan.allow.hosts to actually silence first-party links --
-            // at the medium threshold (1.0) a lone Medium match still blocks.
             Medium,
             Regex,
+            r"(?i)(fetch|load|visit|open|navigate)[\t\n\f\r ]+(https?://|//)(([^\t\n\f\r /@]*@)?(localhost|127\.|0\.0\.0\.0|0x[0-9a-f]{8}|[0-9]{8,10}([/:?#\t\n\f\r ]|$)|10\.[0-9]|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|\[(::1|::ffff:|f[cd]|fe80)|metadata\.google\.internal|[^\t\n\f\r /:?#@]*\.(internal|local)([/:?#\t\n\f\r ]|$))[^\t\n\f\r ]*|[^\t\n\f\r ]*?(\{|\$[{a-z_]|<[^\t\n\f\r >]+>|\[[a-z_ ]{3,}\]|%7b|%3c|%24|%5b|%[a-z_]{3,}%|__[a-z][a-z0-9_]*__|/:[a-z_]{2,}([/?#&\t\n\f\r \x22'),;]|$)|[?&][0-9a-z_.-]+=([\t\n\f\r \x22'),;]|$)|=(your|insert|replace|paste)[_-]|=x{3,}([&#\t\n\f\r \x22'),;]|$)|=(?-i:[A-Z][A-Z0-9]*_[A-Z0-9_]+)|=(the_?|user_?|my_?|your_?)?(api_?keys?|apikey|keys?|token|secrets?|passw(or)?d|credentials?|conversation|context|system_?prompt|prompt|chat_?history|history|data|cookies?)([&#\t\n\f\r \x22'),;]|$))[^\t\n\f\r ]*)",
+        ),
+        // Also fires on every ei-004 span, so a slotted URL scores 1.5. Intended:
+        // do not "fix" it with a suppression that could drop ei-004 too.
+        p(
+            "ei-006",
+            "exfil-instruction",
+            Low,
+            Regex,
             r"(?i)(fetch|load|visit|open|navigate)[\t\n\f\r ]+(https?://|//)[^\t\n\f\r ]+",
+        ),
+        // Low on purpose: with ei-006 on the same payload it sums to exactly 1.0
+        // and blocks, as the old Medium ei-004 did; alone it spares API docs.
+        // Sentence-bounded windows, either word order, and a url/query/link word is
+        // required: without it two "add the token..." lines in ops chat blocked a window.
+        p(
+            "ei-007",
+            "exfil-instruction",
+            Low,
+            Regex,
+            r"(?i)\b((append|add|attach|insert|embed|put|swap|fill)(s|ed|ing|ting)?|(includ|encod|replac|substitut|populat|concatenat)(e|es|ed|ing))\b[^.!?\n]{0,60}?\b(api[\t\n\f\r _-]?keys?|access[\t\n\f\r _-]?keys?|tokens?|secrets?|passwords?|credentials?|cookies?|session[\t\n\f\r ]+(ids?|tokens?)|env(ironment)?[\t\n\f\r ]+variables|system[\t\n\f\r ]+prompt|conversation|context|chat[\t\n\f\r ]+history|messages)\b[^.!?\n]{0,40}?(\b(url|link|query|param(eter)?s?|path)\b|https?://)|\b((append|add|attach|insert|embed|put)(s|ed|ing|ting)?|(includ|encod)(e|es|ed|ing))\b[^.!?\n]{0,30}?\b(url|link|query|param(eter)?s?|path)\b[^.!?\n]{0,40}?\b(api[\t\n\f\r _-]?keys?|access[\t\n\f\r _-]?keys?|tokens?|secrets?|passwords?|credentials?|cookies?|session[\t\n\f\r ]+(ids?|tokens?)|conversation|context|chat[\t\n\f\r ]+history|messages)\b",
         ),
         p(
             "ei-005",
@@ -473,8 +495,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pattern_count_is_55() {
-        assert_eq!(all_patterns().len(), 55);
+    fn test_pattern_count_is_57() {
+        assert_eq!(all_patterns().len(), 57);
     }
 
     #[test]

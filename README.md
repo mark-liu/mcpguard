@@ -99,14 +99,16 @@ for the PostToolUse hook.
 
 Scoring: each match contributes its severity weight (critical 2.0, high 1.5,
 medium 1.0, low 0.5), plus a **+0.25 bonus per additional category** present.
-A payload blocks when the total reaches the threshold.
+A payload blocks when the total reaches the threshold. An identical URL-bearing
+match repeated across the payload (one footer in N search results) counts once;
+literal matches still count per occurrence.
 
 - **low** (threshold 2.0): needs a critical match, two highs, or a broader mix
 - **medium** (threshold 1.0): **any single match of medium severity or above blocks on its own**
 - **high** (threshold 0.5): any single match of any severity blocks
 
 Be deliberate about `medium`: because the medium weight (1.0) equals the medium
-threshold (1.0), **54 of the 55 patterns block alone** at that setting. That is
+threshold (1.0), **53 of the 57 patterns block alone** at that setting. That is
 the intended posture for a fail-closed scanner, but it means a single
 unremarkable literal in a large payload suppresses the whole tool result, so
 expect to use `scan.allow` to tune out benign sources rather than reaching for a
@@ -148,14 +150,14 @@ Semantics, deliberately narrow:
 
 ## Detection patterns
 
-55 patterns across 12 categories, ported from the [webguard-mcp](https://github.com/mark-liu/webguard-mcp) pattern engine and extended with MCP-specific vectors:
+57 patterns across 12 categories, ported from the [webguard-mcp](https://github.com/mark-liu/webguard-mcp) pattern engine and extended with MCP-specific vectors:
 
 | Category | Patterns | Examples |
 |----------|----------|----------|
 | instruction-override | 7 | "ignore previous instructions", "new instructions:" |
 | prompt-marker | 6 | `<\|im_start\|>system`, `[INST]`, `<<SYS>>` |
 | authority-claim | 6 | "i am your developer", "admin override" |
-| exfil-instruction | 5 | "send all data to", tracking pixels |
+| exfil-instruction | 7 | "send all data to", tracking pixels, `fetch <url>?d={secret}` (a plain "Visit <url>" is Low) |
 | tool-manipulation | 5 | "call mcp_slack", "use the function" |
 | context-hijacking | 5 | "IMPORTANT:", `<system>`, "OVERRIDE:" |
 | output-manipulation | 4 | "respond only with", "do not mention" |
