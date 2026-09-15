@@ -167,7 +167,8 @@ fn print_event_detail(w: &mut dyn Write, e: &audit::Event) {
         "  score:       {:.2} across {} matches",
         e.score, e.num_matches
     );
-    let _ = writeln!(w, "  redacted:    {}", e.redacted);
+    let scope = if e.partial { " (URL spans only)" } else { "" };
+    let _ = writeln!(w, "  redacted:    {}{}", e.redacted, scope);
     for (i, m) in e.matches.iter().enumerate() {
         let _ = writeln!(
             w,
@@ -438,6 +439,7 @@ mod tests {
             score: 2.0,
             num_matches: 1,
             redacted: true,
+            partial: false,
             matches: vec![],
         };
         let mut buf: Vec<u8> = Vec::new();

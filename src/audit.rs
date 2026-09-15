@@ -31,6 +31,9 @@ pub struct Event {
     pub score: f64,
     pub num_matches: usize,
     pub redacted: bool,
+    /// True when redact mode blanked URL spans in place instead of the whole output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub matches: Vec<MatchRecord>,
 }
@@ -46,6 +49,7 @@ impl Default for Event {
             score: 0.0,
             num_matches: 0,
             redacted: false,
+            partial: false,
             matches: vec![],
         }
     }
@@ -92,6 +96,7 @@ pub fn event_from_result(
         score: r.score,
         num_matches: r.matches.len(),
         redacted,
+        partial: false,
         matches: records,
     }
 }

@@ -65,6 +65,34 @@ Or add to `~/.claude.json` manually:
 }
 ```
 
+### PostToolUse hook
+
+`mcpguard hook` scans every tool result Claude Code receives, without wrapping
+the server. Register it in `settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__.*$",
+        "hooks": [{ "type": "command", "command": "mcpguard hook --sensitivity medium --mode redact", "timeout": 5 }]
+      }
+    ]
+  }
+}
+```
+
+| `--mode` | On a hit |
+|---|---|
+| `warn` (default) | stderr warning, output passes through |
+| `block` | whole output replaced with a notice |
+| `redact` | like `block`, but when the only problem in an MCP result is a URL (ei-004/005/006), just those URLs become `[mcpguard: URL blocked (<ids>)]` and the rest passes |
+
+`redact` fails closed: a critical match, or any match left when the rewritten
+output is rescanned, falls back to the whole-output notice. Every hit is logged
+metadata-only; `mcpguard audit --last` shows it.
+
 ## Config
 
 YAML config with two sections: `compress` and `scan`.
@@ -145,6 +173,9 @@ Semantics, deliberately narrow:
   ports are stripped, so `https://grafana.net@evil.tld/x` is *not* allowed.
   Suffix matching is label-aware. A URL whose host cannot be parsed is never
   allowed (fail closed).
+- **Every** URL in the matched span must be allowed, so an allowed URL nested in
+  a query (`//evil.tld/c?next=https://grafana.net/x`) does not vouch for the
+  URL around it. Hosts carrying `\`, `%` or non-ASCII are never allowed.
 - `patterns` entries are validated against the pattern table at load time, so a
   typo fails loudly instead of silently disabling nothing.
 
