@@ -122,41 +122,77 @@ impl Allow {
         if self.hosts.is_empty() {
             return false;
         }
-        match first_url_host(&m.text) {
-            Some(host) => self
+        // Every URL in the span must be allowed, so an allowed host nested in a
+        // query cannot vouch for the URL around it. No URL, or any unparseable
+        // host, is NOT allowed: fail closed.
+        let mut hosts = url_hosts(&m.text).peekable();
+        hosts.peek().is_some() && hosts.all(|h| h.is_some_and(|host| self.allows_host(&host)))
+    }
+
+    fn allows_host(&self, host: &str) -> bool {
+        // Only plain DNS labels can suffix-match; anything a lenient parser might
+        // decode or split differently (`%2f`, unicode) is never allowed.
+        let plain = host.starts_with('[')
+            || host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+        plain
+            && self
                 .hosts
                 .iter()
-                .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}"))),
-            // No URL in the matched span -> host rules cannot apply. Notably a
-            // match with an unparseable/empty host is NOT allowed: fail closed.
-            None => false,
-        }
+                .any(|allowed| host == allowed || host.ends_with(&format!(".{allowed}")))
     }
 }
 
-/// first_url_host extracts the real host of the first URL in `s`, lowercased.
+fn first_url_host(s: &str) -> Option<String> {
+    first_url(s).map(|(_, host)| host)
+}
+
+/// first_url returns where the leftmost URL in `s` begins (its scheme, or the
+/// `//` of a protocol-relative URL) and its host.
+///
+/// Leftmost `//`, not the first `://`: in `//evil.tld/?next=https://good.tld`
+/// the nested absolute URL is query data, not the destination.
+pub(crate) fn first_url(s: &str) -> Option<(usize, String)> {
+    let i = s.find("//")?;
+    let url_start = match s[..i].strip_suffix(':') {
+        Some(scheme) => scheme
+            .bytes()
+            .rposition(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-')))
+            .map_or(0, |p| p + 1),
+        None => i,
+    };
+    Some((url_start, authority_host(&s[i + 2..])?))
+}
+
+/// url_hosts yields the host after every `//` in `s`, in order, with None for
+/// each one that is empty or malformed.
+fn url_hosts(s: &str) -> impl Iterator<Item = Option<String>> + '_ {
+    s.match_indices("//")
+        .map(|(i, _)| authority_host(&s[i + 2..]))
+}
+
+/// authority_host extracts the real host from the authority at the start of
+/// `rest`, lowercased.
 ///
 /// Deliberately strict, because this feeds an allow decision:
 /// - userinfo is discarded, so `https://good.tld@evil.tld/x` yields `evil.tld`
 ///   rather than being mistaken for `good.tld` (the classic allowlist bypass)
+/// - a backslash yields None: WHATWG ends the host there, other parsers do not
 /// - the port is stripped
 /// - IPv6 literals in brackets are returned with brackets intact so they can
 ///   never suffix-match a DNS name
 /// - returns None when the host is empty or malformed, which fails closed
-fn first_url_host(s: &str) -> Option<String> {
-    let start = match s.find("://") {
-        Some(i) => i + 3,
-        // Protocol-relative "//host/path". Only treat it as such when the "//"
-        // is not part of a scheme we already failed to find.
-        None => s.find("//").map(|i| i + 2)?,
-    };
-    let rest = &s[start..];
-
-    // Authority ends at the first '/', '?', '#', or whitespace.
+fn authority_host(rest: &str) -> Option<String> {
+    // Authority ends at the first '/', '?', '#', or the ASCII whitespace that ends a
+    // URL pattern match. Other whitespace stays in the host and fails `allows_host`.
     let end = rest
-        .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
+        .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_ascii_whitespace())
         .unwrap_or(rest.len());
     let authority = &rest[..end];
+    if authority.contains('\\') {
+        return None;
+    }
 
     // Strip userinfo: everything up to and including the LAST '@'.
     let hostport = match authority.rfind('@') {
@@ -262,6 +298,20 @@ impl Engine {
             all.extend(self.scan_text(&clean));
         }
         self.verdict_from_matches(all, start)
+    }
+
+    /// matches_in returns the post-allowlist matches in `text`, whose offsets index
+    /// its invisible-stripped form, with a map from every byte offset of that form
+    /// (and its end) back to `text`.
+    pub fn matches_in(&self, text: &str) -> (Vec<Match>, Vec<usize>) {
+        let mut clean = String::with_capacity(text.len());
+        let mut to_original = Vec::with_capacity(text.len() + 1);
+        for (i, c) in text.char_indices().filter(|&(_, c)| !is_invisible(c)) {
+            clean.push(c);
+            to_original.extend(i..i + c.len_utf8());
+        }
+        to_original.push(text.len());
+        (self.scan_text(&clean), to_original)
     }
 
     /// verdictFromMatches applies critical-short-circuit and threshold rules.
@@ -414,20 +464,22 @@ fn dedup(matches: Vec<Match>) -> Vec<Match> {
 /// stripInvisible removes zero-width characters and other invisible formatters.
 /// The Unicode tag range U+E0001–U+E007F is PRESERVED so the uo-004 detector can still fire.
 pub fn strip_invisible(s: &str) -> String {
-    s.chars()
-        .filter(|&c| match c {
-            // Explicit zero-width / BOM characters — drop
-            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => false,
-            // Preserve tag range U+E0001..U+E007F (needed for uo-004)
-            '\u{E0001}'..='\u{E007F}' => true,
-            // Keep common whitespace
-            '\n' | '\r' | '\t' | ' ' => true,
-            // Drop Unicode Cf (format) category characters
-            c if is_cf(c) => false,
-            // Keep everything else
-            _ => true,
-        })
-        .collect()
+    s.chars().filter(|&c| !is_invisible(c)).collect()
+}
+
+fn is_invisible(c: char) -> bool {
+    match c {
+        // Explicit zero-width / BOM characters — drop
+        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => true,
+        // Preserve tag range U+E0001..U+E007F (needed for uo-004)
+        '\u{E0001}'..='\u{E007F}' => false,
+        // Keep common whitespace
+        '\n' | '\r' | '\t' | ' ' => false,
+        // Drop Unicode Cf (format) category characters
+        c if is_cf(c) => true,
+        // Keep everything else
+        _ => false,
+    }
 }
 
 /// Returns true if the character is in Unicode general category Cf (format).
@@ -720,6 +772,16 @@ mod tests {
     }
 
     #[test]
+    fn test_first_url_start_offset() {
+        let start = |s| first_url(s).map(|(i, _)| i);
+        assert_eq!(start("visit HTTPS://evil.tld/x"), Some(6));
+        assert_eq!(start("open //evil.tld/{x}"), Some(5));
+        assert_eq!(start("fetch https://a.tld/?u=http://b/{x}"), Some(6));
+        assert_eq!(start("https://a.tld"), Some(0));
+        assert_eq!(start("no url here"), None);
+    }
+
+    #[test]
     fn test_allow_host_suffix_does_not_match_lookalike() {
         let allow = Allow::new(&["grafana.net".to_string()], &[]);
         let mk = |t: &str| Match {
@@ -738,6 +800,29 @@ mod tests {
         assert!(!allow.suppresses(&mk("Visit https://notgrafana.net/a/x")));
         // userinfo smuggling -> NOT allowed
         assert!(!allow.suppresses(&mk("Visit https://grafana.net@evil.tld/a/x")));
+        // an allowed URL nested in an untrusted one -> NOT allowed
+        assert!(!allow.suppresses(&mk(
+            "visit //evil.tld/c?next=https://grafana.net/x&d=YOUR_API_KEY"
+        )));
+        assert!(!allow.suppresses(&mk("visit https://grafana.net/x?next=//evil.tld/c")));
+        // parser differentials -> NOT allowed
+        assert!(!allow.suppresses(&mk("visit https://evil.tld\\@grafana.net/x")));
+        assert!(!allow.suppresses(&mk("visit https://evil.tld%2F.grafana.net/x")));
+        assert!(!allow.suppresses(&mk("visit https://grafana.net\u{a0}evil.tld/{x}")));
+        assert!(!allow.suppresses(&mk("visit https://grafana.net\u{b}.evil.tld/{x}")));
+        // every URL allowed -> allowed
+        assert!(allow.suppresses(&mk(
+            "visit https://a.grafana.net/x?next=https://b.grafana.net/y"
+        )));
+    }
+
+    #[test]
+    fn test_first_url_is_the_leftmost() {
+        assert_eq!(
+            first_url("visit //evil.tld/c?next=https://grafana.net/x"),
+            Some((6, "evil.tld".to_string()))
+        );
+        assert_eq!(first_url("visit https://evil.tld\\@grafana.net/x"), None);
     }
 
     #[test]

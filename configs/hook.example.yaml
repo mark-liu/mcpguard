@@ -38,6 +38,8 @@ scan:
     # ports are stripped, so "https://grafana.net@evil.tld/x" is NOT allowed.
     # Suffix matching is label-aware, so "grafana.net" allows
     # "twinstake.grafana.net" but not "grafana.net.evil.tld".
+    # EVERY URL in a match must be allowed, so
+    # "//evil.tld/c?next=https://grafana.net/x" is NOT allowed.
     hosts: []
     # hosts:
     #   - grafana.net
