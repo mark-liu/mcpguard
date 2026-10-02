@@ -1,14 +1,13 @@
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::audit;
 use crate::scan;
+use crate::scan::enforce;
 use crate::scan::engine::{Engine, Verdict};
-use crate::scan::extract::walk_strings;
-use crate::scan::redact::redact_urls;
 use crate::scan::report::{format_matches, format_matches_safe};
 
 /// hookEnvelope mirrors the Claude Code PostToolUse JSON sent on stdin.
@@ -40,7 +39,7 @@ pub fn run_hook_path(
     stdin: &mut dyn Read,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
-    audit_path: &PathBuf,
+    audit_path: &Path,
 ) -> i32 {
     // Flags are Options only so "not passed" is distinguishable from "passed
     // the default value"; config never supplies these two (see below).
@@ -216,20 +215,32 @@ pub fn run_hook_path(
         return 0;
     }
 
-    let texts = collect_texts(env.tool_response.as_ref(), env.tool_input.as_ref());
+    let texts = enforce::collect_texts(env.tool_response.as_ref(), env.tool_input.as_ref());
     let engine = Engine::with_allow(
         &sensitivity,
         scan::engine::Allow::new(&allow_cfg.hosts, &allow_cfg.patterns),
     );
     let result = engine.aggregate_scan(&texts);
 
+    let bytes: usize = texts.iter().map(String::len).sum();
+
     if result.verdict == Verdict::Pass {
+        // Pass rows are the denominator for block rates. A failed write stays
+        // silent: stderr here would land in the transcript on every clean call.
+        let mut ev = audit::event_from_result(&env.tool_name, &sensitivity, &mode, false, &result);
+        ev.bytes = bytes;
+        let _ = audit::append(audit_path, &ev);
         return 0;
     }
 
     let will_redact = mode != "warn";
-    let partial = if mode == "redact" {
-        partial_redaction(&engine, &env, &result)
+    let partial = if mode == "redact" && is_mcp_tool(&env.tool_name) {
+        enforce::partial_redaction(
+            &engine,
+            env.tool_response.as_ref(),
+            env.tool_input.as_ref(),
+            &result,
+        )
     } else {
         None
     };
@@ -267,6 +278,7 @@ pub fn run_hook_path(
     let mut ev =
         audit::event_from_result(&env.tool_name, &sensitivity, &mode, will_redact, &result);
     ev.partial = partial.is_some();
+    ev.bytes = bytes;
     if let Err(e) = audit::append(audit_path, &ev) {
         let _ = writeln!(stderr, "[mcpguard] audit log write failed: {}", e);
     }
@@ -274,64 +286,11 @@ pub fn run_hook_path(
     if will_redact {
         let replacement = match partial {
             Some((resp, _)) => resp,
-            None => Value::String(redaction_notice(&result)),
+            None => Value::String(enforce::redaction_notice(&result)),
         };
         emit_redaction(stdout, &env.tool_name, replacement);
     }
     0
-}
-
-/// collect_texts gathers every scannable string, keys included, from the tool
-/// response and input, in that order.
-fn collect_texts(resp: Option<&Value>, input: Option<&Value>) -> Vec<String> {
-    let mut texts = Vec::new();
-    for v in [resp, input].into_iter().flatten() {
-        walk_strings(v, &mut texts);
-    }
-    texts
-}
-
-/// partial_redaction blanks eligible URL spans in an MCP tool response and
-/// returns it with the span count, or None when the whole output must go.
-///
-/// Fail closed: a critical match rules it out, and the rewritten response plus
-/// tool_input must rescan with ZERO matches. Passing the threshold is not
-/// enough, because removing a URL can strip half of a paired score (ei-006 + ei-007).
-fn partial_redaction(
-    engine: &Engine,
-    env: &HookEnvelope,
-    result: &scan::engine::Result,
-) -> Option<(Value, usize)> {
-    if !is_mcp_tool(&env.tool_name) || result.matches.iter().any(|m| m.severity == "critical") {
-        return None;
-    }
-    let mut resp = env.tool_response.clone()?;
-    let n = redact_urls(engine, &mut resp);
-    if n == 0 {
-        return None;
-    }
-    let mut texts = collect_texts(Some(&resp), env.tool_input.as_ref());
-    // The model reads adjacent blocks as one text, and block mode would have taken a
-    // phrase split across them down with the URL. Joined from `text` fields only.
-    let blocks: Vec<&str> = resp
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|b| b.get("text")?.as_str())
-        .collect();
-    texts.extend([blocks.concat(), blocks.join(" ")]);
-    let rescan = engine.aggregate_scan(&texts);
-    rescan.matches.is_empty().then_some((resp, n))
-}
-
-fn redaction_notice(result: &scan::engine::Result) -> String {
-    format!(
-        "[mcpguard redacted: PostToolUse scanner detected possible prompt injection \
-(score={:.1}, {} pattern matches). Original tool output suppressed. \
-Run `mcpguard audit --last` for the metadata-only event record.]",
-        result.score,
-        result.matches.len()
-    )
 }
 
 /// is_mcp_tool reports whether the replacement goes back as
@@ -453,7 +412,7 @@ mod tests {
     fn run_hook_with_audit(
         args: &[&str],
         input: &[u8],
-        audit_path: &PathBuf,
+        audit_path: &Path,
     ) -> (i32, String, String) {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let mut stdin = Cursor::new(input.to_vec());
@@ -730,18 +689,39 @@ mod tests {
     }
 
     #[test]
-    fn test_hook_audit_log_not_written_on_pass() {
+    fn test_hook_audit_logs_pass_row_metadata_only() {
         let dir = TempDir::new().unwrap();
         let audit_path = dir.path().join("audit.jsonl");
-        let input = make_envelope(
-            "mcp__notion-work__notion-search",
-            "Clean Notion page about staking rewards",
+        let text = "Clean Notion page about staking rewards";
+        let input = make_envelope("mcp__notion-work__notion-search", text);
+        let (_, stdout, stderr) = run_hook_with_audit(&["--mode", "warn"], &input, &audit_path);
+        assert_eq!(
+            (stdout.as_str(), stderr.as_str()),
+            ("", ""),
+            "pass stays silent"
         );
-        run_hook_with_audit(&["--mode", "warn"], &input, &audit_path);
-        assert!(
-            !audit_path.exists(),
-            "audit log should not be created on Pass verdict"
-        );
+
+        let data = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(!data.contains("staking"), "pass row leaked payload: {data}");
+        let rows = audit::read(&audit_path, &audit::Filter::default()).unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.verdict, "pass");
+        assert_eq!(r.server, "notion-work");
+        assert_eq!(r.source, "hook");
+        assert!(r.bytes >= text.len(), "bytes covers scanned text");
+        assert!(r.rules.is_empty() && r.matches.is_empty());
+    }
+
+    #[test]
+    fn test_hook_audit_pass_row_with_subthreshold_rule_ids() {
+        let dir = TempDir::new().unwrap();
+        let audit_path = dir.path().join("audit.jsonl");
+        let input = make_envelope("mcp__slack__search", "Critical: disk at 91% on node-7");
+        run_hook_with_audit(&["--mode", "redact"], &input, &audit_path);
+        let rows = audit::read(&audit_path, &audit::Filter::default()).unwrap();
+        assert_eq!(rows[0].verdict, "pass");
+        assert_eq!(rows[0].rules, vec!["ch-002"]);
     }
 
     #[test]

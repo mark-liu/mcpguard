@@ -12,6 +12,7 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     let mut verdict: Option<String> = None;
     let mut tool_sub: Option<String> = None;
     let mut last = false;
+    let mut stats = false;
     let mut limit: usize = 20;
     let mut path = audit::default_path();
 
@@ -47,6 +48,9 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
             }
             "--last" => {
                 last = true;
+            }
+            "--stats" => {
+                stats = true;
             }
             "--limit" => {
                 i += 1;
@@ -86,7 +90,11 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     let mut f = Filter {
         verdict,
         tool: tool_sub,
-        limit: Some(if last { 1 } else { limit }),
+        limit: if stats {
+            None
+        } else {
+            Some(if last { 1 } else { limit })
+        },
         since: None,
     };
 
@@ -119,12 +127,46 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
         return 0;
     }
 
-    if last {
+    if stats {
+        print_stats(stdout, &events);
+    } else if last {
         print_event_detail(stdout, &events[0]);
     } else {
         print_event_table(stdout, &events);
     }
     0
+}
+
+fn print_stats(w: &mut dyn Write, events: &[audit::Event]) {
+    let _ = writeln!(
+        w,
+        "{:<28} {:>7} {:>7} {:>7} {:>6} {:>6} {:>8} {:>8}",
+        "server", "calls", "blocks", "block%", "hook", "proxy", "avg_ms", "max_ms"
+    );
+    let _ = writeln!(w, "{}", "-".repeat(84));
+    for s in audit::server_stats(events) {
+        let _ = writeln!(
+            w,
+            "{:<28} {:>7} {:>7} {:>6.1}% {:>6} {:>6} {:>8.2} {:>8.2}",
+            s.server,
+            s.calls,
+            s.blocks,
+            s.block_pct(),
+            s.hook,
+            s.proxy,
+            s.scan_ms_avg(),
+            s.scan_ms_max,
+        );
+    }
+    let blocks = events.iter().filter(|e| e.verdict == "block").count();
+    let _ = writeln!(w);
+    let _ = writeln!(
+        w,
+        "total: {} calls, {} blocks. Older rows were detections only, with no pass baseline, \
+         so scope with --since for a true rate.",
+        events.len(),
+        blocks
+    );
 }
 
 fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
@@ -157,6 +199,14 @@ fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
 fn print_event_detail(w: &mut dyn Write, e: &audit::Event) {
     let _ = writeln!(w, "Event {}", e.timestamp.format("%+"));
     let _ = writeln!(w, "  tool:        {}", e.tool_name);
+    let _ = writeln!(
+        w,
+        "  source:      {} server={} bytes={} scan_ms={:.2}",
+        e.source,
+        e.server_name(),
+        e.bytes,
+        e.scan_ms
+    );
     let _ = writeln!(
         w,
         "  verdict:     {}  (mode={} sensitivity={})",
@@ -221,8 +271,9 @@ fn print_audit_usage(w: &mut dyn Write) {
 
 Usage: mcpguard audit [filters] [--last] [--limit N]
 
-Reads ~/.local/share/mcpguard/hook-audit.jsonl and prints matching events
-newest-first. The log stores metadata only — pattern_id, category, severity,
+Reads ~/.local/share/mcpguard/hook-audit.jsonl (and its rotated .1) and prints
+matching events newest-first. Every scan is logged, pass included, from both the
+hook and the proxy. The log stores metadata only: pattern_id, category, severity,
 offset, text length, and a SHA-256 prefix per match. The matched bytes
 themselves are never persisted, because Claude reads this log.
 
@@ -231,6 +282,7 @@ Filters (combinable):
   --verdict <v>     pass | warn | block (exact match)
   --tool <substr>   substring match on tool_name (e.g. notion, slack)
   --limit N         show at most N (default 20, newest first)
+  --stats           per-server calls, block % and scan time (ignores --limit)
   --last            shorthand for --limit 1, prints full event detail
   --path <file>     read from this file instead of the default
 
@@ -441,6 +493,7 @@ mod tests {
             redacted: true,
             partial: false,
             matches: vec![],
+            ..Default::default()
         };
         let mut buf: Vec<u8> = Vec::new();
         print_event_table(&mut buf, &[event]);
@@ -453,5 +506,33 @@ mod tests {
             !out.contains("2006-01-02"),
             "table must NOT contain the Go layout literal, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn test_stats_reports_per_server_block_pct() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        for (tool, verdict) in [
+            ("mcp__slack__search", "pass"),
+            ("mcp__slack__search", "pass"),
+            ("mcp__slack__search", "pass"),
+            ("mcp__slack__search", "block"),
+            ("mcp__notion__fetch", "pass"),
+        ] {
+            let e = Event {
+                tool_name: tool.into(),
+                verdict: verdict.into(),
+                ..Default::default()
+            };
+            audit::append(&path, &e).unwrap();
+        }
+        let (code, out, _) =
+            run_audit_cmd(&["--stats", "--limit", "1", "--path", path.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        let slack = out.lines().find(|l| l.starts_with("slack")).expect(&out);
+        assert!(slack.contains("25.0%"), "{slack}");
+        let notion = out.lines().find(|l| l.starts_with("notion")).expect(&out);
+        assert!(notion.contains("0.0%"), "{notion}");
+        assert!(out.contains("total: 5 calls, 1 blocks"), "{out}");
     }
 }
