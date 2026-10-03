@@ -166,7 +166,8 @@ Scoring: each match contributes its severity weight (critical 2.0, high 1.5,
 medium 1.0, low 0.5), plus a **+0.25 bonus per additional category** present.
 A payload blocks when the total reaches the threshold. An identical URL-bearing
 match repeated across the payload (one footer in N search results) counts once;
-literal matches still count per occurrence.
+literal matches still count per occurrence, except `ch-002` ("critical:"), a
+severity label that counts once per payload however often it repeats.
 
 - **low** (threshold 2.0): needs a critical match, two highs, or a broader mix
 - **medium** (threshold 1.0): **any single match of medium severity or above blocks on its own**
