@@ -201,7 +201,10 @@ pub fn append_capped(path: &Path, e: &Event, max_bytes: u64) -> Result<()> {
     // Rotate and append under one lock so racing processes keep every generation.
     let _lock = lock_exclusive(path)?;
     if fs::metadata(path).is_ok_and(|m| m.len() >= max_bytes) {
-        let _ = fs::rename(path, rotated_path(path));
+        // Keep logging on a failed roll, but say so: the log now grows past the cap.
+        if let Err(err) = fs::rename(path, rotated_path(path)) {
+            eprintln!("[mcpguard] audit log rotation failed: {err}");
+        }
     }
     let mut f = OpenOptions::new()
         .append(true)
