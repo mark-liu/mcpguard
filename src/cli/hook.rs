@@ -286,7 +286,7 @@ pub fn run_hook_path(
     if will_redact {
         let replacement = match partial {
             Some((resp, _)) => resp,
-            None => Value::String(enforce::redaction_notice(&result)),
+            None => Value::String(enforce::redaction_notice("PostToolUse", &result)),
         };
         emit_redaction(stdout, &env.tool_name, replacement);
     }

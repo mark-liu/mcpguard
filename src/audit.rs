@@ -164,6 +164,28 @@ fn rotated_path(path: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// lock_exclusive takes an advisory flock on a sidecar file (the log itself is
+/// renamed on rotation, so its inode cannot carry the lock). Released on drop.
+fn lock_exclusive(path: &Path) -> Result<fs::File> {
+    let mut os = path.as_os_str().to_owned();
+    os.push(".lock");
+    let f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(PathBuf::from(os))
+        .with_context(|| format!("audit: open lock for {:?}", path))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on a valid fd we own; blocks until the lock is granted.
+        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error()).context("audit: flock");
+        }
+    }
+    Ok(f)
+}
+
 /// append appends one event as a single JSON line to path, rotating by size.
 /// Creates the parent directory on first use.
 /// Returns an error rather than panicking — callers must degrade gracefully.
@@ -176,7 +198,8 @@ pub fn append_capped(path: &Path, e: &Event, max_bytes: u64) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("audit: mkdir {:?}", parent))?;
     }
-    // A racing process may rotate twice and drop a generation; no line is torn.
+    // Rotate and append under one lock so racing processes keep every generation.
+    let _lock = lock_exclusive(path)?;
     if fs::metadata(path).is_ok_and(|m| m.len() >= max_bytes) {
         let _ = fs::rename(path, rotated_path(path));
     }
@@ -186,8 +209,7 @@ pub fn append_capped(path: &Path, e: &Event, max_bytes: u64) -> Result<()> {
         .open(path)
         .with_context(|| format!("audit: open {:?}", path))?;
 
-    // One write_all: writeln! can split line and newline into two writes,
-    // which interleave across concurrent hook processes and corrupt rows.
+    // One write_all of the whole row, newline included, so rows never interleave.
     let mut line = serde_json::to_string(e).context("audit: serialize event")?;
     line.push('\n');
     f.write_all(line.as_bytes())
@@ -634,6 +656,36 @@ mod tests {
         for ln in data.lines() {
             serde_json::from_str::<Event>(ln).expect("torn line");
         }
+    }
+
+    #[test]
+    fn test_racing_rotation_keeps_every_row() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_log(&dir);
+        let row = serde_json::to_string(&Event::default()).unwrap().len() as u64 + 40;
+        // 400 rows against a ~260-row cap: one rotation is due, so nothing may be lost.
+        let cap = row * 260;
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..50 {
+                        let e = Event {
+                            tool_name: format!("mcp__s__{t}_{i:02}"),
+                            verdict: "pass".into(),
+                            ..Default::default()
+                        };
+                        append_capped(&p, &e, cap).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(rotated_path(&path).exists(), "rotation should have run");
+        let all = read(&path, &Filter::default()).unwrap();
+        assert_eq!(all.len(), 400, "a generation was lost or a row torn");
     }
 
     #[test]

@@ -49,9 +49,10 @@ pub fn partial_redaction(
     rescan.matches.is_empty().then_some((resp, n))
 }
 
-pub fn redaction_notice(result: &Result) -> String {
+/// redaction_notice is the stand-in text; `scanner` names who redacted ("PostToolUse" or "proxy").
+pub fn redaction_notice(scanner: &str, result: &Result) -> String {
     format!(
-        "[mcpguard redacted: PostToolUse scanner detected possible prompt injection \
+        "[mcpguard redacted: {scanner} scanner detected possible prompt injection \
 (score={:.1}, {} pattern matches). Original tool output suppressed. \
 Run `mcpguard audit --last` for the metadata-only event record.]",
         result.score,

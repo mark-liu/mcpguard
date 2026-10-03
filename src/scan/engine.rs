@@ -287,7 +287,8 @@ impl Engine {
         let start = Instant::now();
         let clean = strip_invisible(text);
         let matches = self.scan_text(&clean);
-        self.verdict_from_matches(matches, start)
+        let items = vec![0; matches.len()];
+        self.verdict_from_matches(matches, &items, start)
     }
 
     /// AggregateScan scans every input text, unions the matches across all of
@@ -295,11 +296,14 @@ impl Engine {
     pub fn aggregate_scan(&self, texts: &[String]) -> Result {
         let start = Instant::now();
         let mut all: Vec<Match> = Vec::new();
-        for text in texts {
+        let mut items: Vec<usize> = Vec::new();
+        for (i, text) in texts.iter().enumerate() {
             let clean = strip_invisible(text);
-            all.extend(self.scan_text(&clean));
+            let found = self.scan_text(&clean);
+            items.extend(std::iter::repeat_n(i, found.len()));
+            all.extend(found);
         }
-        self.verdict_from_matches(all, start)
+        self.verdict_from_matches(all, &items, start)
     }
 
     /// matches_in returns the post-allowlist matches in `text`, whose offsets index
@@ -317,7 +321,8 @@ impl Engine {
     }
 
     /// verdictFromMatches applies critical-short-circuit and threshold rules.
-    fn verdict_from_matches(&self, matches: Vec<Match>, start: Instant) -> Result {
+    /// `items[i]` is the index of the text that produced `matches[i]`.
+    fn verdict_from_matches(&self, matches: Vec<Match>, items: &[usize], start: Instant) -> Result {
         let timing_us = start.elapsed().as_micros() as u64;
 
         if matches.is_empty() {
@@ -332,7 +337,7 @@ impl Engine {
         // Critical short-circuit: any critical match → immediate block.
         for m in &matches {
             if m.severity == "critical" {
-                let score = self.score(&matches);
+                let score = self.score(&matches, items);
                 return Result {
                     verdict: Verdict::Block,
                     score,
@@ -342,7 +347,7 @@ impl Engine {
             }
         }
 
-        let score = self.score(&matches);
+        let score = self.score(&matches, items);
         let verdict = if score >= self.threshold {
             Verdict::Block
         } else {
@@ -409,17 +414,25 @@ impl Engine {
     }
 
     /// score sums weighted match scores with category diversity bonus.
-    fn score(&self, matches: &[Match]) -> f64 {
+    fn score(&self, matches: &[Match], items: &[usize]) -> f64 {
         let mut total: f64 = 0.0;
         let mut categories: HashSet<&str> = HashSet::new();
         // An identical URL-bearing span repeated (one footer in N search hits) is
         // one record. Literal spans are identical by construction, so they still sum.
         let mut seen: HashSet<(&str, &str)> = HashSet::new();
-        let mut counted_once: HashSet<&str> = HashSet::new();
+        // COUNT_ONCE ids score the most hits any single item holds, not the payload sum.
+        let mut per_item: HashMap<(&str, usize), usize> = HashMap::new();
+        let mut best: HashMap<&str, usize> = HashMap::new();
 
-        for m in matches {
-            if COUNT_ONCE.contains(&m.pattern_id.as_str()) && !counted_once.insert(&m.pattern_id) {
-                continue;
+        for (m, &item) in matches.iter().zip(items) {
+            if COUNT_ONCE.contains(&m.pattern_id.as_str()) {
+                let n = per_item.entry((&m.pattern_id, item)).or_default();
+                *n += 1;
+                let top = best.entry(&m.pattern_id).or_default();
+                if *n <= *top {
+                    continue;
+                }
+                *top = *n;
             }
             if first_url_host(&m.text).is_some()
                 && !seen.insert((m.pattern_id.as_str(), m.text.as_str()))
@@ -447,8 +460,8 @@ impl Engine {
     }
 }
 
-/// Severity-label literals that score once per payload however often they repeat:
-/// one alert search returns "Critical:" in every result, which is volume, not evidence.
+/// Severity-label literals that score once per result item however often other items
+/// repeat them: an alert search returns "Critical:" in every hit, which is volume.
 const COUNT_ONCE: &[&str] = &["ch-002"];
 
 /// dedup removes duplicate matches at the same (pattern_id, offset).
@@ -1205,5 +1218,22 @@ mod tests {
         let r = e.scan("Critical: one. Important: two.");
         assert_eq!(r.score, 1.0);
         assert_eq!(r.verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn test_ch002_repeats_inside_one_item_still_sum() {
+        let e = Engine::new("medium");
+        let r = e.aggregate_scan(&["Critical: a. Critical: b.".to_string()]);
+        assert_eq!(r.score, 1.0);
+        assert_eq!(r.verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn test_ch002_one_per_item_boilerplate_stays_under_threshold() {
+        let e = Engine::new("medium");
+        let texts: Vec<String> = (0..5).map(|i| format!("Critical: alert {i}")).collect();
+        let r = e.aggregate_scan(&texts);
+        assert_eq!(r.score, 0.5);
+        assert_eq!(r.verdict, Verdict::Pass);
     }
 }

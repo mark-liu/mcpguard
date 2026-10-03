@@ -158,7 +158,9 @@ Only `tools/call` results are altered. Responses to other methods (`tools/list`,
 descriptions routinely contain words like "IMPORTANT:" and blocking them would
 make the server unusable. A response whose request id was never seen is treated
 as a tool call (fail closed). The proxy scans each result as one aggregate, the
-same as the hook.
+same as the hook. JSON-RPC `error` responses (message and data) are scanned the
+same way, batch arrays are handled element by element, and a line that looks like
+JSON but cannot be parsed is withheld rather than forwarded unscanned.
 
 ### Sensitivity levels
 
@@ -167,7 +169,7 @@ medium 1.0, low 0.5), plus a **+0.25 bonus per additional category** present.
 A payload blocks when the total reaches the threshold. An identical URL-bearing
 match repeated across the payload (one footer in N search results) counts once;
 literal matches still count per occurrence, except `ch-002` ("critical:"), a
-severity label that counts once per payload however often it repeats.
+severity label that counts once per result item however often other items repeat it.
 
 - **low** (threshold 2.0): needs a critical match, two highs, or a broader mix
 - **medium** (threshold 1.0): **any single match of medium severity or above blocks on its own**
