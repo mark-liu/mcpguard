@@ -32,9 +32,14 @@ pub struct ScanConfig {
     /// low, medium, high
     #[serde(default = "default_sensitivity")]
     pub sensitivity: String,
-    /// warn, block
+    /// warn, block. With `enforce` on, warn redacts like `hook --mode redact`
+    /// and block answers with a JSON-RPC error; see `enforce`.
     #[serde(default = "default_action")]
     pub action: String,
+    /// Proxy only. true (default): a block verdict on a tool result is acted on.
+    /// false: detections are logged and warned, the payload passes unchanged.
+    #[serde(default = "default_enforce")]
+    pub enforce: bool,
     /// Matches to drop before scoring. See AllowConfig.
     #[serde(default)]
     pub allow: AllowConfig,
@@ -71,6 +76,10 @@ fn default_sensitivity() -> String {
     "medium".to_string()
 }
 
+fn default_enforce() -> bool {
+    true
+}
+
 fn default_action() -> String {
     "warn".to_string()
 }
@@ -80,6 +89,7 @@ impl Default for ScanConfig {
         ScanConfig {
             sensitivity: "medium".to_string(),
             action: "warn".to_string(),
+            enforce: true,
             allow: AllowConfig::default(),
         }
     }

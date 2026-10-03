@@ -6,7 +6,7 @@ MCP stdio proxy that scans tool results for prompt injection and compresses payl
 
 MCP servers return user-generated content — Discord messages, Telegram chats, Slack threads — that flows directly into the LLM's context. Any user in a monitored channel can inject prompts. The responses are also bloated with metadata (avatars, file references, access hashes) that the model doesn't need and that wastes context tokens.
 
-mcpguard sits between Claude Code and any MCP server, intercepting JSON-RPC tool results. Two passes: compress (strip fields, cap content length, truncate arrays) then scan (pattern-based prompt injection detection). Warnings go to stderr; the (possibly compressed) payload continues to stdout.
+mcpguard sits between Claude Code and any MCP server, intercepting JSON-RPC tool results. Two passes: compress (strip fields, cap content length, truncate arrays) then scan (pattern-based prompt injection detection). A detected injection is redacted (or blocked, per config) before it reaches stdout; every scan is also logged metadata-only to the audit log.
 
 ## Install
 
@@ -41,6 +41,9 @@ mcpguard --config configs/discord.yaml /path/to/discord-mcp
 
 # Telegram with stats on exit
 mcpguard --config configs/telegram.yaml --stats uv --directory /path/to/telegram-mcp run main.py
+
+# Name the server in the audit log (default: the command's basename)
+mcpguard --name discord --config configs/discord.yaml /path/to/discord-mcp
 
 # Compression only (no injection scanning)
 mcpguard --config configs/discord.yaml --compress-only /path/to/discord-mcp
@@ -90,8 +93,23 @@ the server. Register it in `settings.json`:
 | `redact` | like `block`, but when the only problem in an MCP result is a URL (ei-004/005/006), just those URLs become `[mcpguard: URL blocked (<ids>)]` and the rest passes |
 
 `redact` fails closed: a critical match, or any match left when the rewritten
-output is rescanned, falls back to the whole-output notice. Every hit is logged
-metadata-only; `mcpguard audit --last` shows it.
+output is rescanned, falls back to the whole-output notice.
+
+### Audit log and stats
+
+Every scan, pass included, from both the hook and the proxy appends one
+metadata-only row to `~/.local/share/mcpguard/hook-audit.jsonl`: server, tool,
+source (`hook`/`proxy`), bytes scanned, verdict, `scan_ms` and the rule ids that
+fired. Payload text is never written. The log rolls to `hook-audit.jsonl.1` at
+8 MiB.
+
+```bash
+mcpguard audit --stats --since 24h   # per-server calls, blocks, block %, scan time
+mcpguard audit --last                # full detail of the newest event
+```
+
+Rows written by older versions are detections only, so a rate over a window that
+includes them is skewed; scope with `--since`.
 
 ## Config
 
@@ -114,7 +132,8 @@ compress:
 
 scan:
   sensitivity: medium               # low (threshold=2.0), medium (1.0), high (0.5)
-  action: warn                      # warn (log to stderr) or block
+  action: warn                      # warn, or block (JSON-RPC error); see "Proxy enforcement"
+  enforce: true                     # proxy only; false = log and warn, payload untouched
   allow:                            # drop known-benign matches before scoring
     hosts: []                       # host suffixes that are not exfil destinations
     patterns: []                    # pattern ids to disable, e.g. ch-002
@@ -122,6 +141,24 @@ scan:
 
 See `configs/` for Discord and Telegram examples, and `configs/hook.example.yaml`
 for the PostToolUse hook.
+
+### Proxy enforcement
+
+The proxy acts on a block verdict the way the hook does, so the two layers are
+real defence in depth rather than a warning that only the child's stderr sees.
+With `scan.enforce: true` (the default):
+
+- `action: warn` redacts like `hook --mode redact`: a URL-only hit blanks just
+  those URLs, anything else replaces the whole result with a notice
+- `action: block` answers with a JSON-RPC error instead of the result
+- `enforce: false` restores log-and-warn only; detections still reach the audit log
+
+Only `tools/call` results are altered. Responses to other methods (`tools/list`,
+`initialize`) are scanned and logged on a hit but never changed, because tool
+descriptions routinely contain words like "IMPORTANT:" and blocking them would
+make the server unusable. A response whose request id was never seen is treated
+as a tool call (fail closed). The proxy scans each result as one aggregate, the
+same as the hook.
 
 ### Sensitivity levels
 

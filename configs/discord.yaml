@@ -6,3 +6,4 @@ compress:
 scan:
   sensitivity: medium
   action: warn
+  enforce: true   # default: redact like the hook; false = log and warn only

@@ -53,6 +53,7 @@ fn main() {
     let mut scan_only = false;
     let mut compress_only = false;
     let mut show_stats = false;
+    let mut server_name: Option<String> = None;
     let mut child_args: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -64,6 +65,13 @@ fn main() {
                     fatal("--config requires a path argument");
                 }
                 config_path = Some(args[i].clone());
+            }
+            "--name" | "-n" => {
+                i += 1;
+                if i >= args.len() {
+                    fatal("--name requires a server name");
+                }
+                server_name = Some(args[i].clone());
             }
             "--scan-only" => scan_only = true,
             "--compress-only" => compress_only = true,
@@ -106,7 +114,13 @@ fn main() {
         config::default_config()
     };
 
-    let p = proxy::Proxy::new(cfg, scan_only, compress_only, show_stats);
+    // Audit server name: --name, else the wrapped command's basename.
+    let server = server_name.unwrap_or_else(|| {
+        std::path::Path::new(&child_args[0])
+            .file_name()
+            .map_or_else(|| "unknown".into(), |n| n.to_string_lossy().into_owned())
+    });
+    let p = proxy::Proxy::new(cfg, scan_only, compress_only, show_stats, server);
     let (code, err) = p.run(&child_args);
     if let Some(e) = err {
         eprintln!("mcpguard: {e}");
@@ -126,6 +140,7 @@ Usage:
 
 Flags (proxy mode):
   --config, -c <path>   YAML config file (optional, defaults to scan-only)
+  --name, -n <server>    Server name in the audit log (default: command basename)
   --scan-only            Skip compression, only scan for injection
   --compress-only        Skip scanning, only compress
   --stats                Print compression stats to stderr on exit

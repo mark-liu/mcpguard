@@ -3,6 +3,7 @@ use serde_json::Value;
 /// extract_strings unmarshals a JSON document and returns every string value
 /// longer than 3 chars, recursively (including object keys).
 /// Returns empty vec on parse error.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn extract_strings(data: &[u8]) -> Vec<String> {
     match serde_json::from_slice::<Value>(data) {
         Err(_) => vec![],

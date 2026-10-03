@@ -281,6 +281,8 @@ impl Engine {
     }
 
     /// Scan runs the detection pipeline on a text string and returns a result.
+    /// Production paths aggregate; this single-text form is exercised by tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn scan(&self, text: &str) -> Result {
         let start = Instant::now();
         let clean = strip_invisible(text);
