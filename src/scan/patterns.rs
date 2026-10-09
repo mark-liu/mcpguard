@@ -348,7 +348,7 @@ pub fn all_patterns() -> Vec<Pattern> {
         // test_allow_pattern_id_disables_detector), which zeroes the contribution
         // regardless of count, or running that surface at low sensitivity.
         p("ch-001", "context-hijacking", Low, Literal, "important:"),
-        // Scored once per payload (engine COUNT_ONCE): search results repeat the label.
+        // Scored once per line (engine COUNT_ONCE): search results repeat the label.
         p("ch-002", "context-hijacking", Low, Literal, "critical:"),
         p(
             "ch-003",
