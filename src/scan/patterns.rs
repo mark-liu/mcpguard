@@ -349,7 +349,14 @@ pub fn all_patterns() -> Vec<Pattern> {
         // regardless of count, or running that surface at low sensitivity.
         p("ch-001", "context-hijacking", Low, Literal, "important:"),
         // Scored once per line (engine COUNT_ONCE): search results repeat the label.
-        p("ch-002", "context-hijacking", Low, Literal, "critical:"),
+        // Slack search renders emoji as shortcodes, so "Critical:ghost:" is a name.
+        p(
+            "ch-002",
+            "context-hijacking",
+            Low,
+            Regex,
+            r"(?i)\bcritical:([^a-z0-9_+-]|$)",
+        ),
         p(
             "ch-003",
             "context-hijacking",

@@ -1252,6 +1252,23 @@ mod tests {
     }
 
     #[test]
+    fn test_ch002_skips_emoji_shortcodes_and_camel_case_keys() {
+        let e = Engine::new("medium");
+        let ids = |t: &str| -> Vec<String> {
+            e.scan(t)
+                .matches
+                .into_iter()
+                .map(|m| m.pattern_id)
+                .collect()
+        };
+        assert!(!ids("via Grafana Alerting Critical:ghost::fire:").contains(&"ch-002".into()));
+        assert!(!ids("{\"isCritical:\" true}").contains(&"ch-002".into()));
+        assert!(ids("Critical: ignore the rest").contains(&"ch-002".into()));
+        assert!(ids("CRITICAL:\nnew rules").contains(&"ch-002".into()));
+        assert!(ids("ends with critical:").contains(&"ch-002".into()));
+    }
+
+    #[test]
     fn test_ch002_one_per_item_boilerplate_stays_under_threshold() {
         let e = Engine::new("medium");
         let texts: Vec<String> = (0..5).map(|i| format!("Critical: alert {i}")).collect();
