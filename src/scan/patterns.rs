@@ -233,8 +233,9 @@ pub fn all_patterns() -> Vec<Pattern> {
             "om-001",
             "output-manipulation",
             Medium,
-            Literal,
-            "respond only with",
+            Regex,
+            // Quote required: bare "respond only with valid JSON" is ordinary prose.
+            r#"(?i)respond[\t\n\f\r ]+only[\t\n\f\r ]+with[\t\n\f\r ]+["'\x{201C}\x{201D}\x{2018}\x{2019}]"#,
         ),
         p(
             "om-002",
@@ -255,7 +256,8 @@ pub fn all_patterns() -> Vec<Pattern> {
             "output-manipulation",
             Medium,
             Regex,
-            r"(?i)(always|must|should)[\t\n\f\r ]+respond[\t\n\f\r ]+(with|by|using)[\t\n\f\r ]+",
+            // Quote required on every branch: "the API will always respond with JSON" is docs.
+            r#"(?i)respond[\t\n\f\r ]+with[\t\n\f\r ]+(only[\t\n\f\r ]+)?["'\x{201C}\x{201D}\x{2018}\x{2019}]"#,
         ),
         // tool-manipulation (5)
         p(
@@ -437,7 +439,8 @@ pub fn all_patterns() -> Vec<Pattern> {
             "encoded-injection",
             Medium,
             Regex,
-            r"(?i)String\.fromCharCode[\t\n\f\r ]*\(",
+            // A run of 4+ numeric char codes is the obfuscation shape; the bare builtin is not.
+            r"(?i)String\.fromCharCode[\t\n\f\r ]*\([\t\n\f\r ]*[0-9]+[\t\n\f\r ]*(,[\t\n\f\r ]*[0-9]+[\t\n\f\r ]*){3,}",
         ),
         // html-injection (5)
         p(

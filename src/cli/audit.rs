@@ -13,6 +13,7 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     let mut tool_sub: Option<String> = None;
     let mut last = false;
     let mut stats = false;
+    let mut include_test = false;
     let mut limit: usize = 20;
     let mut path = audit::default_path();
 
@@ -51,6 +52,9 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
             }
             "--stats" => {
                 stats = true;
+            }
+            "--include-test" => {
+                include_test = true;
             }
             "--limit" => {
                 i += 1;
@@ -114,13 +118,22 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
         }
     }
 
-    let events = match audit::read(&path, &f) {
-        Ok(e) => e,
+    let outcome = match audit::read_report(&path, &f) {
+        Ok(o) => o,
         Err(e) => {
             let _ = writeln!(stderr, "mcpguard audit: {}", e);
             return 1;
         }
     };
+
+    let mut events = outcome.events;
+    // Only stats are skewed by test traffic; the listing views stay complete.
+    let mut excluded = 0;
+    if stats && !include_test {
+        let before = events.len();
+        events.retain(|e| !e.is_test());
+        excluded = before - events.len();
+    }
 
     if events.is_empty() {
         let _ = writeln!(stdout, "(no matching events)");
@@ -128,7 +141,7 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     }
 
     if stats {
-        print_stats(stdout, &events);
+        print_stats(stdout, &events, excluded, outcome.skipped);
     } else if last {
         print_event_detail(stdout, &events[0]);
     } else {
@@ -137,36 +150,51 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     0
 }
 
-fn print_stats(w: &mut dyn Write, events: &[audit::Event]) {
+fn print_stats(w: &mut dyn Write, events: &[audit::Event], excluded: usize, skipped: usize) {
     let _ = writeln!(
         w,
-        "{:<28} {:>7} {:>7} {:>7} {:>6} {:>6} {:>8} {:>8}",
-        "server", "calls", "blocks", "block%", "hook", "proxy", "avg_ms", "max_ms"
+        "{:<28} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>8} {:>8}",
+        "server", "calls", "blocks", "block%", "partial", "hook", "proxy", "avg_ms", "max_ms"
     );
-    let _ = writeln!(w, "{}", "-".repeat(84));
+    let _ = writeln!(w, "{}", "-".repeat(92));
     for s in audit::server_stats(events) {
         let _ = writeln!(
             w,
-            "{:<28} {:>7} {:>7} {:>6.1}% {:>6} {:>6} {:>8.2} {:>8.2}",
+            "{:<28} {:>7} {:>7} {:>6.1}% {:>7} {:>6} {:>6} {:>8.2} {:>8.2}",
             s.server,
             s.calls,
             s.blocks,
             s.block_pct(),
+            s.partials,
             s.hook,
             s.proxy,
             s.scan_ms_avg(),
             s.scan_ms_max,
         );
     }
-    let blocks = events.iter().filter(|e| e.verdict == "block").count();
+    let partials = events
+        .iter()
+        .filter(|e| e.verdict == "block" && e.partial)
+        .count();
+    let blocks = events.iter().filter(|e| e.verdict == "block").count() - partials;
     let _ = writeln!(w);
     let _ = writeln!(
         w,
-        "total: {} calls, {} blocks. Older rows were detections only, with no pass baseline, \
-         so scope with --since for a true rate.",
+        "total: {} calls, {} blocks, {} partial redactions. Older rows were detections only, \
+         with no pass baseline, so scope with --since for a true rate.",
         events.len(),
-        blocks
+        blocks,
+        partials
     );
+    if excluded > 0 {
+        let _ = writeln!(
+            w,
+            "excluded {excluded} canary/tagged test events (--include-test to count them)"
+        );
+    }
+    if skipped > 0 {
+        let _ = writeln!(w, "skipped {skipped} unparseable log lines");
+    }
 }
 
 fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
@@ -282,7 +310,9 @@ Filters (combinable):
   --verdict <v>     pass | warn | block (exact match)
   --tool <substr>   substring match on tool_name (e.g. notion, slack)
   --limit N         show at most N (default 20, newest first)
-  --stats           per-server calls, block % and scan time (ignores --limit)
+  --stats           per-server calls, block %, partial redactions and scan time
+                    (ignores --limit); excludes canary and tagged test events
+  --include-test    with --stats, count mcp__canary__* and MCPGUARD_AUDIT_TAG events
   --last            shorthand for --limit 1, prints full event detail
   --path <file>     read from this file instead of the default
 
@@ -534,5 +564,63 @@ mod tests {
         let notion = out.lines().find(|l| l.starts_with("notion")).expect(&out);
         assert!(notion.contains("0.0%"), "{notion}");
         assert!(out.contains("total: 5 calls, 1 blocks"), "{out}");
+    }
+
+    fn append_all(path: &std::path::Path, rows: &[(&str, &str, bool, &str)]) {
+        for (tool, verdict, partial, tag) in rows {
+            let e = Event {
+                tool_name: tool.to_string(),
+                verdict: verdict.to_string(),
+                partial: *partial,
+                tag: tag.to_string(),
+                ..Default::default()
+            };
+            audit::append(path, &e).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_stats_excludes_canary_and_tagged_by_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        append_all(
+            &path,
+            &[
+                ("mcp__slack__search", "pass", false, ""),
+                ("mcp__canary__echo", "block", false, ""),
+                ("mcp__slack__search", "block", false, "replay"),
+            ],
+        );
+        let p = path.to_str().unwrap();
+        let (_, out, _) = run_audit_cmd(&["--stats", "--path", p]);
+        assert!(out.contains("total: 1 calls, 0 blocks"), "{out}");
+        assert!(out.contains("excluded 2 canary/tagged"), "{out}");
+        assert!(!out.lines().any(|l| l.starts_with("canary")), "{out}");
+        let (_, out, _) = run_audit_cmd(&["--stats", "--include-test", "--path", p]);
+        assert!(out.contains("total: 3 calls, 2 blocks"), "{out}");
+        assert!(out.lines().any(|l| l.starts_with("canary")), "{out}");
+    }
+
+    #[test]
+    fn test_stats_reports_partials_and_skipped_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        append_all(
+            &path,
+            &[
+                ("mcp__slack__search", "block", false, ""),
+                ("mcp__slack__search", "block", true, ""),
+                ("mcp__slack__search", "pass", false, ""),
+            ],
+        );
+        let mut data = fs::read_to_string(&path).unwrap();
+        data.push_str("{\"ts\": truncated\n");
+        fs::write(&path, data).unwrap();
+        let (_, out, _) = run_audit_cmd(&["--stats", "--path", path.to_str().unwrap()]);
+        assert!(
+            out.contains("total: 3 calls, 1 blocks, 1 partial redactions"),
+            "{out}"
+        );
+        assert!(out.contains("skipped 1 unparseable"), "{out}");
     }
 }

@@ -50,6 +50,19 @@ pub struct Event {
     pub partial: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub matches: Vec<MatchRecord>,
+    /// Free-form run label from `MCPGUARD_AUDIT_TAG` (e.g. "replay"); marks test traffic.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+}
+
+/// CANARY_PREFIX is the tool-name prefix of the health-check canary server.
+const CANARY_PREFIX: &str = "mcp__canary__";
+
+/// tag_from_env reads `MCPGUARD_AUDIT_TAG`, trimmed; empty when unset.
+fn tag_from_env() -> String {
+    std::env::var("MCPGUARD_AUDIT_TAG")
+        .map(|t| t.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn default_source() -> String {
@@ -65,6 +78,16 @@ pub fn server_of(tool_name: &str) -> &str {
 }
 
 impl Event {
+    /// is_canary derives from the tool name, so rows written before 0.4.2 classify too.
+    pub fn is_canary(&self) -> bool {
+        self.tool_name.starts_with(CANARY_PREFIX)
+    }
+
+    /// is_test is canary or explicitly tagged traffic; stats exclude it by default.
+    pub fn is_test(&self) -> bool {
+        self.is_canary() || !self.tag.is_empty()
+    }
+
     /// server_name is the recorded server, falling back to the tool name for old rows.
     pub fn server_name(&self) -> &str {
         if self.server.is_empty() {
@@ -93,6 +116,7 @@ impl Default for Event {
             redacted: false,
             partial: false,
             matches: vec![],
+            tag: String::new(),
         }
     }
 }
@@ -151,6 +175,7 @@ pub fn event_from_result(
         redacted,
         partial: false,
         matches: records,
+        tag: tag_from_env(),
     }
 }
 
@@ -238,12 +263,31 @@ fn read_file(path: &Path) -> Result<String> {
     }
 }
 
+/// ReadOutcome is the filtered events plus how many non-blank lines would not parse.
+#[derive(Debug, Default)]
+pub struct ReadOutcome {
+    pub events: Vec<Event>,
+    pub skipped: usize,
+}
+
 /// read parses path (and its rotated `.1` generation) as JSONL and returns
-/// events matching f, newest-first. Malformed lines are skipped silently.
+/// events matching f, newest-first. Unparseable lines are skipped; use
+/// `read_report` to learn how many.
+#[cfg(test)]
 pub fn read(path: &Path, f: &Filter) -> Result<Vec<Event>> {
+    read_report(path, f).map(|o| o.events)
+}
+
+/// read_report is `read` that also counts unparseable lines, filtered or not.
+pub fn read_report(path: &Path, f: &Filter) -> Result<ReadOutcome> {
     let mut data = read_file(&rotated_path(path))?;
+    // A torn last row in `.1` must not fuse with the first live row.
+    if !data.is_empty() && !data.ends_with('\n') {
+        data.push('\n');
+    }
     data.push_str(&read_file(path)?);
 
+    let mut skipped = 0;
     let mut out: Vec<Event> = Vec::new();
     for line in data.lines() {
         let line = line.trim();
@@ -252,7 +296,10 @@ pub fn read(path: &Path, f: &Filter) -> Result<Vec<Event>> {
         }
         let e: Event = match serde_json::from_str(line) {
             Ok(e) => e,
-            Err(_) => continue, // skip malformed lines silently
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
         };
         if let Some(since) = f.since
             && e.timestamp < since
@@ -279,7 +326,10 @@ pub fn read(path: &Path, f: &Filter) -> Result<Vec<Event>> {
         out.truncate(limit);
     }
 
-    Ok(out)
+    Ok(ReadOutcome {
+        events: out,
+        skipped,
+    })
 }
 
 /// ServerStats is one server's rolled-up scan counts.
@@ -287,7 +337,9 @@ pub fn read(path: &Path, f: &Filter) -> Result<Vec<Event>> {
 pub struct ServerStats {
     pub server: String,
     pub calls: usize,
+    /// Whole-output blocks only; partial URL redactions count in `partials`.
     pub blocks: usize,
+    pub partials: usize,
     pub hook: usize,
     pub proxy: usize,
     pub scan_ms_total: f64,
@@ -318,7 +370,13 @@ pub fn server_stats(events: &[Event]) -> Vec<ServerStats> {
     for e in events {
         let s = by.entry(e.server_name()).or_default();
         s.calls += 1;
-        s.blocks += usize::from(e.verdict == "block");
+        if e.verdict == "block" {
+            if e.partial {
+                s.partials += 1;
+            } else {
+                s.blocks += 1;
+            }
+        }
         match e.source.as_str() {
             "proxy" => s.proxy += 1,
             _ => s.hook += 1,
@@ -717,5 +775,62 @@ mod tests {
         assert_eq!(st[0].scan_ms_avg(), 2.0);
         assert_eq!(st[0].scan_ms_max, 3.0);
         assert_eq!(st[1].block_pct(), 100.0);
+    }
+
+    fn row(tool: &str) -> String {
+        let e = Event {
+            tool_name: tool.into(),
+            verdict: "pass".into(),
+            ..Default::default()
+        };
+        serde_json::to_string(&e).unwrap()
+    }
+
+    #[test]
+    fn test_read_report_counts_fused_and_garbage_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("a.jsonl");
+        let (a, b) = (row("mcp__x__a"), row("mcp__x__b"));
+        // The pre-0.4.0 two-write append fused rows like this and left a blank line.
+        fs::write(&path, format!("{a}\n{a}{b}\n\nnot json\n{b}\n")).unwrap();
+        let out = read_report(&path, &Filter::default()).unwrap();
+        assert_eq!(out.events.len(), 2);
+        assert_eq!(out.skipped, 2, "blank lines are not counted");
+    }
+
+    #[test]
+    fn test_read_does_not_fuse_torn_rotated_tail_with_live_head() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("a.jsonl");
+        let a = row("mcp__x__a");
+        fs::write(rotated_path(&path), &a).unwrap();
+        fs::write(&path, format!("{a}\n")).unwrap();
+        let out = read_report(&path, &Filter::default()).unwrap();
+        assert_eq!((out.events.len(), out.skipped), (2, 0));
+    }
+
+    #[test]
+    fn test_canary_and_tag_classify_as_test() {
+        let mk = |tool: &str, tag: &str| Event {
+            tool_name: tool.into(),
+            tag: tag.into(),
+            ..Default::default()
+        };
+        assert!(mk("mcp__canary__echo", "").is_canary());
+        assert!(mk("mcp__slack__search", "replay").is_test());
+        assert!(!mk("mcp__slack__search", "").is_test());
+        assert!(!mk("mcp__canaryish__x", "").is_canary());
+    }
+
+    #[test]
+    fn test_server_stats_splits_partial_from_full_block() {
+        let mk = |verdict: &str, partial: bool| Event {
+            tool_name: "mcp__slack__search".into(),
+            verdict: verdict.into(),
+            partial,
+            ..Default::default()
+        };
+        let s = &server_stats(&[mk("block", false), mk("block", true), mk("pass", false)])[0];
+        assert_eq!((s.calls, s.blocks, s.partials), (3, 1, 1));
     }
 }

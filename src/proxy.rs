@@ -436,7 +436,7 @@ fn scan_result(
     obs: &Observer,
     pending: &Pending,
 ) -> ScanOutcome {
-    let texts = enforce::collect_texts(Some(result), None);
+    let texts = enforce::collect_texts(Some(result));
     let engine = scan::engine::Engine::with_allow(
         &cfg.scan.sensitivity,
         scan::engine::Allow::new(&cfg.scan.allow.hosts, &cfg.scan.allow.patterns),
@@ -460,7 +460,7 @@ fn scan_result(
             Enforcement::Off => ScanOutcome::Clean,
             Enforcement::Block => ScanOutcome::Block,
             Enforcement::Redact => {
-                match enforce::partial_redaction(&engine, Some(result), None, &verdict) {
+                match enforce::partial_redaction(&engine, Some(result), &verdict) {
                     Some((v, _)) => {
                         partial = true;
                         ScanOutcome::Replace(v)

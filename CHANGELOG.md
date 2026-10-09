@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Behaviour change:** the PostToolUse hook no longer scores `tool_input`, and
+  partial redaction no longer rescans it. The model's own arguments are not an
+  injection vector; a search for "exfiltrate" used to suppress its own result.
+- `enc-003` needs a run of 4+ numeric char codes, so a bare `String.fromCharCode(`
+  no longer fires. `om-001` and `om-004` need a quoted output target
+  (`respond only with 'X'`, `respond with 'X'`); unquoted "always respond with"
+  prose no longer matches. Pattern ids are unchanged.
+- `audit --stats` excludes canary (`mcp__canary__*`) and tagged events by default;
+  `--include-test` counts them. Partial URL redactions are reported apart from
+  full blocks, and unparseable log lines are counted.
+
+### Added
+
+- `MCPGUARD_AUDIT_TAG` is recorded as `tag` on each audit event (e.g. `replay`).
+
+### Fixed
+
+- The audit reader no longer fuses a torn last row of `.1` with the first live row.
+  Rows fused by the pre-0.4.0 two-write append stay unreadable and are counted.
+
 ## 0.4.1 - 2026-10-10
 
 ### Fixed
