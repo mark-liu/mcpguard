@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-10-10
+
+### Fixed
+
+- `ch-002` counts once per line instead of once per JSON string. Slack search
+  returns every hit in one CSV string, so the 0.4.0 per-item cap never applied
+  and N alert hits scored N x 0.5.
+- `ch-002` no longer matches emoji shortcodes (`Critical:ghost:`, how Slack
+  search renders a Grafana IRM integration name) or camelCase keys
+  (`isCritical:`).
+- The false-positive corpus feeds Slack search as one CSV string, the shape
+  the hook receives.
+
 ## 0.4.0 - 2026-10-03
 
 ### Changed
