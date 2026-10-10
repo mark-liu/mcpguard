@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 - 2026-10-10
 
 ### Changed - in-place redaction skips huge payloads
 
