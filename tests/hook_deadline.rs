@@ -164,3 +164,28 @@ fn last_mode_flag_wins_for_the_watchdog() {
     );
     assert!(r.stdout.trim().is_empty(), "{}", r.stdout);
 }
+
+#[test]
+fn help_flag_withholds_when_enforcing() {
+    let r = run(&["--mode", "block", "--help"], "hello");
+    assert_eq!(r.code, 0);
+    assert!(replacement(&r.stdout).starts_with("[mcpguard withheld: invalid hook flags"));
+}
+
+#[test]
+fn dangling_mode_after_block_withholds() {
+    let r = run(&["--mode", "block", "--mode"], "hello");
+    assert_eq!(r.code, 0);
+    assert!(replacement(&r.stdout).starts_with("[mcpguard withheld: invalid hook flags"));
+}
+
+#[test]
+fn clean_repaired_envelope_delivers_the_scanned_text() {
+    let body = br#"{"tool_name":"mcp__slack__conversations_history","tool_response":[{"type":"text","text":"weather is fine \ud800 today"}]}"#;
+    let r = run_raw(&["--mode", "redact"], body);
+    let v: Value = serde_json::from_str(r.stdout.trim()).expect("hook stdout is not JSON");
+    assert_eq!(
+        v["hookSpecificOutput"]["updatedMCPToolOutput"][0]["text"],
+        "weather is fine \u{FFFD} today"
+    );
+}

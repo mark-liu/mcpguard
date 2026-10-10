@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed - hook fails closed in block and redact mode
+
+Claude Code passes the raw tool output through when a hook times out, crashes
+or exits without a replacement. In `block` and `redact` mode the hook now
+withholds the output (a `[mcpguard withheld: ...]` notice plus an audit row)
+when the scan overruns `--deadline-ms` (new, default 3500, `0` disables),
+panics, gets unparseable input, or is given bad flags. A lone UTF-16
+surrogate in the envelope, which made the parser reject it and skip the scan,
+is replaced with U+FFFD and scanned, and the scanned text is what the model
+receives. A repeated `--mode` resolves to the last value everywhere, and
+`--help` or a dangling `--mode` after `block`/`redact` withholds.
+
 ## 0.4.3 - 2026-10-10
 
 ### Changed - in-place redaction skips huge payloads

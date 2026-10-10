@@ -44,24 +44,35 @@ struct GuardState {
 /// end with no replacement (overrun, crash, unparseable input, bad flags)
 /// withholds the output instead, because Claude Code passes it through raw.
 pub fn run_hook_guarded(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        print_hook_usage(&mut std::io::stderr());
-        return 0;
-    }
-    let sensitivity = flag_value(args, "--sensitivity")
-        .unwrap_or("medium")
-        .to_string();
-    let mode = flag_value(args, "--mode").unwrap_or("warn").to_string();
-    let enforcing = mode == "block" || mode == "redact";
     let state = Arc::new(Mutex::new(GuardState {
         done: false,
         tool: String::new(),
     }));
+    let sensitivity = flag_value(args, "--sensitivity")
+        .unwrap_or("medium")
+        .to_string();
+    let mode = flag_value(args, "--mode").unwrap_or("warn").to_string();
+    let enforcing = match mode.as_str() {
+        "block" | "redact" => true,
+        "warn" => false,
+        // A dangling or invalid last --mode fails closed if any earlier one enforced.
+        _ => args
+            .windows(2)
+            .any(|w| w[0] == "--mode" && (w[1] == "block" || w[1] == "redact")),
+    };
     let withhold_now = |why: &str, reason: &str| {
         let mut g = lock(&state);
         withhold(&g.tool, why, reason, &sensitivity, &mode);
         g.done = true;
     };
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        if enforcing {
+            withhold_now("invalid hook flags", "flags");
+        } else {
+            print_hook_usage(&mut std::io::stderr());
+        }
+        return 0;
+    }
 
     let (deadline_ms, rest) = match split_deadline(args) {
         Ok(v) => v,
@@ -96,11 +107,13 @@ pub fn run_hook_guarded(args: &[String]) -> i32 {
     let mut raw = Vec::new();
     let read_ok = std::io::stdin().read_to_end(&mut raw).is_ok();
     let mut env = serde_json::from_slice::<HookEnvelope>(&raw).ok();
+    let mut repaired = false;
     if env.is_none()
         && let Some(fixed) = repair_lone_surrogates(&raw)
     {
         env = serde_json::from_slice::<HookEnvelope>(&fixed).ok();
         raw = fixed;
+        repaired = true;
     }
     match &env {
         Some(e) => lock(&state).tool = e.tool_name.clone(),
@@ -133,6 +146,14 @@ pub fn run_hook_guarded(args: &[String]) -> i32 {
     let code = match res {
         Ok(1) if enforcing => {
             withhold(&g.tool, "invalid hook flags", "flags", &sensitivity, &mode);
+            0
+        }
+        // A clean repaired envelope still goes back as the text that was
+        // scanned, so the model never sees what the scan did not.
+        Ok(0) if enforcing && repaired && out.is_empty() => {
+            if let Some(resp) = env.and_then(|e| e.tool_response) {
+                emit_redaction(&mut std::io::stdout(), &g.tool, resp);
+            }
             0
         }
         Ok(code) => {
@@ -216,12 +237,11 @@ fn split_deadline(args: &[String]) -> Result<(u64, Vec<String>), String> {
 }
 
 /// flag_value returns the value after the LAST `name`, matching the parser in
-/// `run_hook_path`, so the guard and the scan agree on a repeated flag.
+/// `run_hook_path`, so the guard and the scan agree on a repeated flag. A
+/// trailing `name` with no value reads as "" (invalid), not as absent.
 fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter()
-        .rposition(|a| a == name)
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str)
+    let i = args.iter().rposition(|a| a == name)?;
+    Some(args.get(i + 1).map_or("", String::as_str))
 }
 
 /// withhold replaces the tool output with a fail-closed notice and records it.
