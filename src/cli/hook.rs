@@ -1,5 +1,10 @@
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,19 +25,146 @@ struct HookEnvelope {
     tool_response: Option<Value>,
 }
 
-/// run_hook reads a PostToolUse envelope from stdin and scans it.
-/// Returns exit code: 0 always (per spec — never exit 2; internal failures exit 0).
-/// Flag errors exit 1.
-pub fn run_hook(
-    args: &[String],
-    stdin: &mut dyn Read,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> i32 {
-    run_hook_path(args, stdin, stdout, stderr, &audit::default_path())
+/// Wall-clock budget for the whole hook. Claude Code delivers the RAW tool
+/// output when it kills a hook at its timeout (5 s in settings.json).
+const DEFAULT_DEADLINE_MS: u64 = 4000;
+
+/// GuardState is shared by the scan and the watchdog; whoever locks it first
+/// and finds `done == false` owns stdout.
+struct GuardState {
+    done: bool,
+    tool: String,
 }
 
-/// run_hook_path is the test-overridable variant with an explicit audit log path.
+/// run_hook_guarded is the process entry point: it runs `run_hook_path` under
+/// a deadline and a panic catch, and in block/redact mode withholds the output
+/// itself (fail closed) instead of letting a timeout or crash pass it through.
+pub fn run_hook_guarded(args: &[String]) -> i32 {
+    let (deadline_ms, rest) = match split_deadline(args) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("mcpguard hook: {msg}");
+            return 1;
+        }
+    };
+    let sensitivity = flag_value(&rest, "--sensitivity")
+        .unwrap_or("medium")
+        .to_string();
+    let mode = flag_value(&rest, "--mode").unwrap_or("warn").to_string();
+    let enforcing = mode == "block" || mode == "redact";
+    let state = Arc::new(Mutex::new(GuardState {
+        done: false,
+        tool: String::new(),
+    }));
+
+    if enforcing && deadline_ms > 0 {
+        let st = Arc::clone(&state);
+        let (sens, md) = (sensitivity.clone(), mode.clone());
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(deadline_ms));
+            let g = st.lock().unwrap_or_else(|e| e.into_inner());
+            if !g.done {
+                let why = format!("scan did not finish within {deadline_ms} ms");
+                withhold(&g.tool, &why, "deadline", &sens, &md);
+                process::exit(0);
+            }
+        });
+    }
+
+    let mut raw = Vec::new();
+    let _ = std::io::stdin().read_to_end(&mut raw);
+    if let Ok(t) = serde_json::from_slice::<ToolNameOnly>(&raw) {
+        state.lock().unwrap_or_else(|e| e.into_inner()).tool = t.tool_name;
+    }
+
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let res = panic::catch_unwind(AssertUnwindSafe(|| {
+        run_hook_path(
+            &rest,
+            &mut Cursor::new(&raw),
+            &mut out,
+            &mut err,
+            &audit::default_path(),
+        )
+    }));
+
+    let mut g = state.lock().unwrap_or_else(|e| e.into_inner());
+    g.done = true;
+    let _ = std::io::stderr().write_all(&err);
+    match res {
+        Ok(code) => {
+            let mut so = std::io::stdout();
+            let _ = so.write_all(&out);
+            let _ = so.flush();
+            code
+        }
+        Err(_) => {
+            if enforcing {
+                withhold(&g.tool, "scanner panicked", "panic", &sensitivity, &mode);
+            }
+            0
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ToolNameOnly {
+    #[serde(default)]
+    tool_name: String,
+}
+
+/// split_deadline removes `--deadline-ms N` from the hook flags and returns it
+/// (default DEFAULT_DEADLINE_MS; 0 disables the watchdog).
+fn split_deadline(args: &[String]) -> Result<(u64, Vec<String>), String> {
+    let mut deadline = DEFAULT_DEADLINE_MS;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--deadline-ms" {
+            deadline = it
+                .next()
+                .and_then(|v| v.parse().ok())
+                .ok_or("--deadline-ms requires a whole number of milliseconds")?;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    Ok((deadline, rest))
+}
+
+/// flag_value returns the value following `name`, if present.
+fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+}
+
+/// withhold replaces the tool output with a fail-closed notice and records it.
+/// An unparsed envelope is treated as MCP: settings.json only routes mcp__ tools here.
+fn withhold(tool: &str, why: &str, reason: &str, sensitivity: &str, mode: &str) {
+    let tool = if tool.is_empty() {
+        "mcp__unknown"
+    } else {
+        tool
+    };
+    let notice = format!(
+        "[mcpguard withheld: {why}. Original tool output suppressed (fail closed); \
+narrow the request and retry.]"
+    );
+    let mut so = std::io::stdout();
+    emit_redaction(&mut so, tool, Value::String(notice));
+    let _ = so.flush();
+    eprintln!("[mcpguard] WITHHELD on {tool}: {why}");
+    let _ = audit::append(
+        &audit::default_path(),
+        &audit::withheld_event(tool, sensitivity, mode, reason),
+    );
+}
+
+/// run_hook_path reads a PostToolUse envelope and scans it, logging to `audit_path`.
+/// Returns exit code: 0 always (per spec — never exit 2; internal failures exit 0).
+/// Flag errors exit 1.
 pub fn run_hook_path(
     args: &[String],
     stdin: &mut dyn Read,
@@ -383,6 +515,11 @@ Flags:
   --mode            warn (default), block or redact. All exit 0.
   --show-excerpts   include raw match text in stderr (UNSAFE — Claude can
                     re-ingest it). Only for active debug sessions.
+  --deadline-ms     wall-clock budget, default 4000; 0 disables. In block or
+                    redact mode, a scan that overruns it or panics WITHHOLDS the
+                    output (fail closed), because Claude Code passes the raw
+                    output through when it kills a hook at its timeout. Keep it
+                    below the hook's settings.json timeout.
 "#
     );
 }

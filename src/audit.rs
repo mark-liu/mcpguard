@@ -184,6 +184,30 @@ pub fn event_from_result(
     }
 }
 
+/// withheld_event records a hook that suppressed output without a verdict
+/// (deadline or panic); `reason` lands in `rules` so `--stats` can group it.
+pub fn withheld_event(tool_name: &str, sensitivity: &str, mode: &str, reason: &str) -> Event {
+    Event {
+        timestamp: Utc::now(),
+        tool_name: tool_name.to_string(),
+        server: server_of(tool_name).to_string(),
+        source: default_source(),
+        bytes: 0,
+        scan_ms: 0.0,
+        rules: vec![reason.to_string()],
+        sensitivity: sensitivity.to_string(),
+        mode: mode.to_string(),
+        verdict: "block".to_string(),
+        score: 0.0,
+        num_matches: 0,
+        redacted: true,
+        partial: false,
+        span_redacted: false,
+        matches: Vec::new(),
+        tag: tag_from_env(),
+    }
+}
+
 /// Size at which the log rolls to `<path>.1`; bounds disk use to about twice this.
 pub const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 

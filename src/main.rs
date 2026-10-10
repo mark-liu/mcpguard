@@ -20,13 +20,7 @@ fn main() {
     if let Some(sub) = args.first() {
         match sub.as_str() {
             "hook" => {
-                let code = cli::hook::run_hook(
-                    &args[1..],
-                    &mut std::io::stdin(),
-                    &mut std::io::stdout(),
-                    &mut std::io::stderr(),
-                );
-                process::exit(code);
+                process::exit(cli::hook::run_hook_guarded(&args[1..]));
             }
             "audit" => {
                 let code = cli::audit::run_audit(
