@@ -48,6 +48,9 @@ pub struct Event {
     /// True when redact mode blanked URL spans in place instead of the whole output.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub partial: bool,
+    /// True when redact mode replaced only the matched low/medium spans in place.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub span_redacted: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub matches: Vec<MatchRecord>,
     /// Free-form run label from `MCPGUARD_AUDIT_TAG` (e.g. "replay"); marks test traffic.
@@ -115,6 +118,7 @@ impl Default for Event {
             num_matches: 0,
             redacted: false,
             partial: false,
+            span_redacted: false,
             matches: vec![],
             tag: String::new(),
         }
@@ -174,6 +178,7 @@ pub fn event_from_result(
         num_matches: r.matches.len(),
         redacted,
         partial: false,
+        span_redacted: false,
         matches: records,
         tag: tag_from_env(),
     }
@@ -337,9 +342,12 @@ pub fn read_report(path: &Path, f: &Filter) -> Result<ReadOutcome> {
 pub struct ServerStats {
     pub server: String,
     pub calls: usize,
-    /// Whole-output blocks only; partial URL redactions count in `partials`.
+    /// Whole-output blocks only; in-place redactions count in `partials` / `spans`.
     pub blocks: usize,
+    /// URL spans blanked in place.
     pub partials: usize,
+    /// Matched low/medium spans removed in place.
+    pub spans: usize,
     pub hook: usize,
     pub proxy: usize,
     pub scan_ms_total: f64,
@@ -373,6 +381,8 @@ pub fn server_stats(events: &[Event]) -> Vec<ServerStats> {
         if e.verdict == "block" {
             if e.partial {
                 s.partials += 1;
+            } else if e.span_redacted {
+                s.spans += 1;
             } else {
                 s.blocks += 1;
             }
@@ -832,5 +842,38 @@ mod tests {
         };
         let s = &server_stats(&[mk("block", false), mk("block", true), mk("pass", false)])[0];
         assert_eq!((s.calls, s.blocks, s.partials), (3, 1, 1));
+    }
+
+    #[test]
+    fn test_server_stats_counts_span_redactions_separately() {
+        let mk = |verdict: &str, partial: bool, span: bool| Event {
+            tool_name: "mcp__slack__search".into(),
+            verdict: verdict.into(),
+            partial,
+            span_redacted: span,
+            ..Default::default()
+        };
+        let s = &server_stats(&[
+            mk("block", false, false),
+            mk("block", true, false),
+            mk("block", false, true),
+            mk("pass", false, false),
+        ])[0];
+        assert_eq!((s.calls, s.blocks, s.partials, s.spans), (4, 1, 1, 1));
+    }
+
+    #[test]
+    fn test_span_redacted_serialises_only_when_true() {
+        let mut e = Event::default();
+        assert!(!serde_json::to_string(&e).unwrap().contains("span_redacted"));
+        e.span_redacted = true;
+        assert!(
+            serde_json::to_string(&e)
+                .unwrap()
+                .contains("\"span_redacted\":true")
+        );
+        let old: Event =
+            serde_json::from_str(&serde_json::to_string(&Event::default()).unwrap()).unwrap();
+        assert!(!old.span_redacted);
     }
 }

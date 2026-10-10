@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Span-level redaction in `hook --mode redact` and the proxy's redact action:
+  when every match is low or medium severity and none is an exfil-category or
+  URL-bearing match, only the matched spans become `[mcpguard redacted: <ids>]`
+  and the rest of the output is delivered. High or critical matches keep the
+  whole-output notice. Non-text content blocks (image, audio, resource) and
+  object keys are never rewritten; a match inside one, or any match left on
+  rescan, falls back to the whole-output notice.
+- Audit rows record `span_redacted: true` for these (distinct from a block and
+  from a URL `partial`), and `audit --stats` counts them in a `spans` column
+  and in the total line.
+- Matching runs on a folded form of the text: Unicode space separators
+  (nbsp, U+2000-200A, U+3000, ...) become a plain space, U+00AD is removed, and
+  NFKC is applied, so nbsp, soft-hyphen and fullwidth spellings of a phrase
+  match. Redaction maps folded offsets back to the original bytes.
+
+### Changed
+
+- **Behaviour change:** `ei-002` (`exfiltrate`) now requires a destination on
+  the same line within 120 chars (URL, email, hostname, IPv4, `host:port`).
+  Bare security vocabulary no longer blocks. It is never suppressed by a host
+  allowlist, since its span ends at the first destination.
+- Use neutral example names in tests and docs.
+
 ## 0.4.2 - 2026-10-10
 
 ### Changed

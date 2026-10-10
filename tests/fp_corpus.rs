@@ -13,6 +13,8 @@ enum Outcome {
     Pass,
     /// URL spans blanked in place, the rest passes.
     Partial,
+    /// Matched low/medium spans removed, the rest passes.
+    Span,
     /// Whole output replaced by the notice.
     Notice,
 }
@@ -52,6 +54,8 @@ fn run_hook(home: &std::path::Path, tool: &str, texts: &[Value]) -> Outcome {
         .is_some_and(|s| s.starts_with("[mcpguard redacted:"))
     {
         Outcome::Notice
+    } else if stdout.contains("[mcpguard redacted: ") {
+        Outcome::Span
     } else {
         Outcome::Partial
     }
@@ -70,6 +74,7 @@ fn corpus_outcomes_match_expectations() {
         let want = match c["expect"].as_str().unwrap() {
             "pass" => Outcome::Pass,
             "partial" => Outcome::Partial,
+            "span" => Outcome::Span,
             "notice" => Outcome::Notice,
             other => panic!("{id}: unknown expect {other:?}"),
         };

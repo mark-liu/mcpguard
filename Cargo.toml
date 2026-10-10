@@ -23,6 +23,8 @@ regex = "1"
 # hand-rolled range table drifts from the real category and leaves Cf chars
 # (e.g. U+0890) un-stripped, which is a detection-evasion gap (SPEC §5.3).
 unicode-general-category = "1"
+# NFKC for the fold pass: fullwidth / compatibility forms must match their ASCII spelling.
+unicode-normalization = "0.1"
 # serde_json with preserve_order keeps JSON-RPC object key order closest to the
 # original payload on re-marshal (SPEC §5.6). serde_yaml for config.
 serde = { version = "1", features = ["derive"] }

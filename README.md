@@ -90,7 +90,7 @@ the server. Register it in `settings.json`:
 |---|---|
 | `warn` (default) | stderr warning, output passes through |
 | `block` | whole output replaced with a notice |
-| `redact` | like `block`, but when the only problem in an MCP result is a URL (ei-004/005/006), just those URLs become `[mcpguard: URL blocked (<ids>)]` and the rest passes |
+| `redact` | like `block`, but when the only problem in an MCP result is a URL (ei-004/005/006), just those URLs become `[mcpguard: URL blocked (<ids>)]` and the rest passes. When every match is low or medium severity and none is an exfil or URL match, each matched span becomes `[mcpguard redacted: <ids>]` and the rest passes; image/audio/resource blocks are never rewritten |
 
 `redact` fails closed: a critical match, or any match left when the rewritten
 output is rescanned, falls back to the whole-output notice.
@@ -149,7 +149,7 @@ real defence in depth rather than a warning that only the child's stderr sees.
 With `scan.enforce: true` (the default):
 
 - `action: warn` redacts like `hook --mode redact`: a URL-only hit blanks just
-  those URLs, anything else replaces the whole result with a notice
+  those URLs, a low/medium-only hit removes just the matched spans, anything else replaces the whole result with a notice
 - `action: block` answers with a JSON-RPC error instead of the result
 - `enforce: false` restores log-and-warn only; detections still reach the audit log
 

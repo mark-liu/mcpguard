@@ -162,19 +162,29 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
 fn print_stats(w: &mut dyn Write, events: &[audit::Event]) {
     let _ = writeln!(
         w,
-        "{:<28} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>8} {:>8}",
-        "server", "calls", "blocks", "block%", "partial", "hook", "proxy", "avg_ms", "max_ms"
+        "{:<28} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>6} {:>8} {:>8}",
+        "server",
+        "calls",
+        "blocks",
+        "block%",
+        "partial",
+        "spans",
+        "hook",
+        "proxy",
+        "avg_ms",
+        "max_ms"
     );
-    let _ = writeln!(w, "{}", "-".repeat(92));
+    let _ = writeln!(w, "{}", "-".repeat(99));
     for s in audit::server_stats(events) {
         let _ = writeln!(
             w,
-            "{:<28} {:>7} {:>7} {:>6.1}% {:>7} {:>6} {:>6} {:>8.2} {:>8.2}",
+            "{:<28} {:>7} {:>7} {:>6.1}% {:>7} {:>6} {:>6} {:>6} {:>8.2} {:>8.2}",
             s.server,
             s.calls,
             s.blocks,
             s.block_pct(),
             s.partials,
+            s.spans,
             s.hook,
             s.proxy,
             s.scan_ms_avg(),
@@ -185,15 +195,20 @@ fn print_stats(w: &mut dyn Write, events: &[audit::Event]) {
         .iter()
         .filter(|e| e.verdict == "block" && e.partial)
         .count();
-    let blocks = events.iter().filter(|e| e.verdict == "block").count() - partials;
+    let spans = events
+        .iter()
+        .filter(|e| e.verdict == "block" && !e.partial && e.span_redacted)
+        .count();
+    let blocks = events.iter().filter(|e| e.verdict == "block").count() - partials - spans;
     let _ = writeln!(w);
     let _ = writeln!(
         w,
-        "total: {} calls, {} blocks, {} partial redactions. Older rows were detections only, \
+        "total: {} calls, {} blocks, {} partial redactions, {} span redactions. Older rows were detections only, \
          with no pass baseline, so scope with --since for a true rate.",
         events.len(),
         blocks,
-        partials
+        partials,
+        spans
     );
 }
 
@@ -274,7 +289,13 @@ fn print_event_detail(w: &mut dyn Write, e: &audit::Event) {
         "  score:       {:.2} across {} matches",
         e.score, e.num_matches
     );
-    let scope = if e.partial { " (URL spans only)" } else { "" };
+    let scope = if e.partial {
+        " (URL spans only)"
+    } else if e.span_redacted {
+        " (matched spans only)"
+    } else {
+        ""
+    };
     let _ = writeln!(w, "  redacted:    {}{}", e.redacted, scope);
     for (i, m) in e.matches.iter().enumerate() {
         let _ = writeln!(
@@ -339,7 +360,7 @@ Filters (combinable):
   --verdict <v>     pass | warn | block (exact match)
   --tool <substr>   substring match on tool_name (e.g. notion, slack)
   --limit N         show at most N (default 20, newest first)
-  --stats           per-server calls, block %, partial redactions and scan time
+  --stats           per-server calls, block %, partial (URL) and span redactions and scan time
                     (ignores --limit); excludes canary and tagged test events
   --include-test    with --stats, count mcp__canary__* and MCPGUARD_AUDIT_TAG events
   --last            shorthand for --limit 1, prints full event detail
@@ -551,6 +572,7 @@ mod tests {
             num_matches: 1,
             redacted: true,
             partial: false,
+            span_redacted: false,
             matches: vec![],
             ..Default::default()
         };
@@ -650,7 +672,7 @@ mod tests {
         fs::write(&path, data).unwrap();
         let (_, out, _) = run_audit_cmd(&["--stats", "--path", path.to_str().unwrap()]);
         assert!(
-            out.contains("total: 3 calls, 1 blocks, 1 partial redactions"),
+            out.contains("total: 3 calls, 1 blocks, 1 partial redactions, 0 span redactions"),
             "{out}"
         );
         assert!(out.contains("skipped 1 unparseable"), "{out}");
@@ -672,5 +694,38 @@ mod tests {
         assert!(list.contains("mcp__slack__search [replay]"), "{list}");
         let (_, last, _) = run_audit_cmd(&["--last", "--path", p]);
         assert!(last.contains("tag:         replay"), "{last}");
+    }
+
+    #[test]
+    fn test_stats_counts_span_redactions_separately() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        append_all(
+            &path,
+            &[
+                ("mcp__slack__search", "block", false, ""),
+                ("mcp__slack__search", "block", true, ""),
+                ("mcp__slack__search", "pass", false, ""),
+            ],
+        );
+        audit::append(
+            &path,
+            &Event {
+                tool_name: "mcp__slack__search".into(),
+                verdict: "block".into(),
+                span_redacted: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, out, _) = run_audit_cmd(&["--stats", "--path", path.to_str().unwrap()]);
+        assert!(
+            out.contains("total: 4 calls, 1 blocks, 1 partial redactions, 1 span redactions"),
+            "{out}"
+        );
+        let slack = out.lines().find(|l| l.starts_with("slack")).expect(&out);
+        let cols: Vec<&str> = slack.split_whitespace().collect();
+        // server calls blocks block% partial spans hook proxy avg max
+        assert_eq!(&cols[1..6], ["4", "1", "25.0%", "1", "1"], "{slack}");
     }
 }

@@ -14,6 +14,7 @@ use crate::compress;
 use crate::config::Config;
 use crate::scan;
 use crate::scan::enforce;
+use crate::scan::redact::Kind;
 
 /// Stats tracks proxy-level metrics.
 #[derive(Debug, Default)]
@@ -451,7 +452,7 @@ fn scan_result(
         Enforcement::Off
     };
     let mut outcome = ScanOutcome::Clean;
-    let mut partial = false;
+    let mut in_place: Option<Kind> = None;
 
     if blocked {
         stats.injection_blocks.fetch_add(1, Ordering::Relaxed);
@@ -460,10 +461,10 @@ fn scan_result(
             Enforcement::Off => ScanOutcome::Clean,
             Enforcement::Block => ScanOutcome::Block,
             Enforcement::Redact => {
-                match enforce::partial_redaction(&engine, Some(result), &verdict) {
-                    Some((v, _)) => {
-                        partial = true;
-                        ScanOutcome::Replace(v)
+                match enforce::in_place_redaction(&engine, Some(result), &verdict) {
+                    Some(p) => {
+                        in_place = Some(p.kind);
+                        ScanOutcome::Replace(p.resp)
                     }
                     None => {
                         let notice = enforce::redaction_notice("proxy", &verdict);
@@ -480,11 +481,12 @@ fn scan_result(
                 }
             }
         };
-        let label = match (mode, partial) {
+        let label = match (mode, in_place) {
             (Enforcement::Off, _) => "WARNING: potential injection (not enforced)",
             (Enforcement::Block, _) => "BLOCKED: injection detected",
-            (Enforcement::Redact, true) => "REDACTED: URL spans blocked in place",
-            (Enforcement::Redact, false) => "BLOCKED: injection detected (redacted)",
+            (Enforcement::Redact, Some(Kind::Span)) => "REDACTED: matched spans removed in place",
+            (Enforcement::Redact, Some(Kind::Url)) => "REDACTED: URL spans blocked in place",
+            (Enforcement::Redact, None) => "BLOCKED: injection detected (redacted)",
         };
         let _ = writeln!(
             io::stderr(),
@@ -520,7 +522,8 @@ fn scan_result(
         ev.server = obs.server.clone();
         ev.source = "proxy".into();
         ev.bytes = texts.iter().map(String::len).sum();
-        ev.partial = partial;
+        ev.partial = in_place == Some(Kind::Url);
+        ev.span_redacted = in_place == Some(Kind::Span);
         obs.log(&ev);
     }
     outcome

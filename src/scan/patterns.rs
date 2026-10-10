@@ -178,7 +178,15 @@ pub fn all_patterns() -> Vec<Pattern> {
             Literal,
             "send all data to",
         ),
-        p("ei-002", "exfil-instruction", High, Literal, "exfiltrate"),
+        // Bare "exfiltrate" is security vocabulary; require a destination within
+        // 120 chars on the same line: URL, email, hostname or IPv4, host:port.
+        p(
+            "ei-002",
+            "exfil-instruction",
+            High,
+            Regex,
+            r"(?i)exfiltrate[a-z]*[^\n]{0,120}?(https?://|//[a-z0-9]|[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}|[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}|[0-9]{1,3}(\.[0-9]{1,3}){3}|localhost|[a-z0-9-]+:[0-9]{2,5})",
+        ),
         p(
             "ei-003",
             "exfil-instruction",
