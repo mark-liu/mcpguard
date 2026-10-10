@@ -257,7 +257,7 @@ pub fn all_patterns() -> Vec<Pattern> {
             Medium,
             Regex,
             // Quote required on every branch: "the API will always respond with JSON" is docs.
-            r#"(?i)respond[\t\n\f\r ]+with[\t\n\f\r ]+(only[\t\n\f\r ]+)?["'\x{201C}\x{201D}\x{2018}\x{2019}]"#,
+            r#"(?i)respond[\t\n\f\r ]+(with|by|using)[\t\n\f\r ]+((only|saying)[\t\n\f\r ]+)?["'\x{201C}\x{201D}\x{2018}\x{2019}]"#,
         ),
         // tool-manipulation (5)
         p(
@@ -439,8 +439,8 @@ pub fn all_patterns() -> Vec<Pattern> {
             "encoded-injection",
             Medium,
             Regex,
-            // A run of 4+ numeric char codes is the obfuscation shape; the bare builtin is not.
-            r"(?i)String\.fromCharCode[\t\n\f\r ]*\([\t\n\f\r ]*[0-9]+[\t\n\f\r ]*(,[\t\n\f\r ]*[0-9]+[\t\n\f\r ]*){3,}",
+            // A run of 4+ numeric (dec or hex) char codes is the obfuscation shape; the bare builtin is not.
+            r"(?i)String\.fromCharCode[\t\n\f\r ]*\([\t\n\f\r ]*(0x[0-9a-f]+|[0-9]+)[\t\n\f\r ]*(,[\t\n\f\r ]*(0x[0-9a-f]+|[0-9]+)[\t\n\f\r ]*){3,}",
         ),
         // html-injection (5)
         p(

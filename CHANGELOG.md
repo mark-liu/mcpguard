@@ -9,10 +9,13 @@
   injection vector; a search for "exfiltrate" used to suppress its own result.
 - `enc-003` needs a run of 4+ numeric char codes, so a bare `String.fromCharCode(`
   no longer fires. `om-001` and `om-004` need a quoted output target
-  (`respond only with 'X'`, `respond with 'X'`); unquoted "always respond with"
-  prose no longer matches. Pattern ids are unchanged.
-- `audit --stats` excludes canary (`mcp__canary__*`) and tagged events by default;
-  `--include-test` counts them. Partial URL redactions are reported apart from
+  (`respond only with 'X'`, `respond (with|by|using) [only|saying] 'X'`). Colon and bare-word
+  forms (`respond with the word X`, `respond with: X`, `Respond only with the
+  following text: X`) are no longer matched; accepted false-positive trade.
+  `enc-003` accepts hex codes (`0x69`). Pattern ids are unchanged.
+- `audit --stats` excludes canary (`mcp__canary__*`) and tagged events by default
+  and names the excluded tags; `--include-test` counts them. `--last` and the
+  listing show a row's tag. Partial URL redactions are reported apart from
   full blocks, and unparseable log lines are counted.
 
 ### Added

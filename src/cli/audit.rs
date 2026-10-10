@@ -129,19 +129,28 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     let mut events = outcome.events;
     // Only stats are skewed by test traffic; the listing views stay complete.
     let mut excluded = 0;
+    let mut tags = std::collections::BTreeSet::new();
     if stats && !include_test {
         let before = events.len();
-        events.retain(|e| !e.is_test());
+        events.retain(|e| {
+            let test = e.is_test();
+            if test {
+                tags.insert(if e.tag.is_empty() { "canary" } else { &e.tag }.to_string());
+            }
+            !test
+        });
         excluded = before - events.len();
     }
 
     if events.is_empty() {
         let _ = writeln!(stdout, "(no matching events)");
+        print_notes(stdout, excluded, &tags, outcome.skipped);
         return 0;
     }
 
     if stats {
-        print_stats(stdout, &events, excluded, outcome.skipped);
+        print_stats(stdout, &events);
+        print_notes(stdout, excluded, &tags, outcome.skipped);
     } else if last {
         print_event_detail(stdout, &events[0]);
     } else {
@@ -150,7 +159,7 @@ pub fn run_audit(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write
     0
 }
 
-fn print_stats(w: &mut dyn Write, events: &[audit::Event], excluded: usize, skipped: usize) {
+fn print_stats(w: &mut dyn Write, events: &[audit::Event]) {
     let _ = writeln!(
         w,
         "{:<28} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>8} {:>8}",
@@ -186,10 +195,22 @@ fn print_stats(w: &mut dyn Write, events: &[audit::Event], excluded: usize, skip
         blocks,
         partials
     );
+}
+
+/// print_notes says what --stats left out or could not read, so a clean-looking
+/// total is never silently partial.
+fn print_notes(
+    w: &mut dyn Write,
+    excluded: usize,
+    tags: &std::collections::BTreeSet<String>,
+    skipped: usize,
+) {
     if excluded > 0 {
+        let list: Vec<&str> = tags.iter().map(String::as_str).collect();
         let _ = writeln!(
             w,
-            "excluded {excluded} canary/tagged test events (--include-test to count them)"
+            "excluded {excluded} canary/tagged (tags: {}); --include-test to count them",
+            list.join(", ")
         );
     }
     if skipped > 0 {
@@ -200,20 +221,25 @@ fn print_stats(w: &mut dyn Write, events: &[audit::Event], excluded: usize, skip
 fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
     let _ = writeln!(
         w,
-        "{:<25} {:<7} {:<6} {:<7} tool_name",
+        "{:<25} {:<7} {:<6} {:<7} tool_name [tag]",
         "ts", "verdict", "score", "matches"
     );
     let _ = writeln!(w, "{}", "-".repeat(100));
     for e in events {
         let _ = writeln!(
             w,
-            "{:<25} {:<7} {:<6.1} {:<7} {}",
+            "{:<25} {:<7} {:<6.1} {:<7} {}{}",
             e.timestamp
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             e.verdict,
             e.score,
             e.num_matches,
             e.tool_name,
+            if e.tag.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", e.tag)
+            },
         );
     }
     let _ = writeln!(w);
@@ -227,6 +253,9 @@ fn print_event_table(w: &mut dyn Write, events: &[audit::Event]) {
 fn print_event_detail(w: &mut dyn Write, e: &audit::Event) {
     let _ = writeln!(w, "Event {}", e.timestamp.format("%+"));
     let _ = writeln!(w, "  tool:        {}", e.tool_name);
+    if !e.tag.is_empty() {
+        let _ = writeln!(w, "  tag:         {}", e.tag);
+    }
     let _ = writeln!(
         w,
         "  source:      {} server={} bytes={} scan_ms={:.2}",
@@ -594,7 +623,10 @@ mod tests {
         let p = path.to_str().unwrap();
         let (_, out, _) = run_audit_cmd(&["--stats", "--path", p]);
         assert!(out.contains("total: 1 calls, 0 blocks"), "{out}");
-        assert!(out.contains("excluded 2 canary/tagged"), "{out}");
+        assert!(
+            out.contains("excluded 2 canary/tagged (tags: canary, replay)"),
+            "{out}"
+        );
         assert!(!out.lines().any(|l| l.starts_with("canary")), "{out}");
         let (_, out, _) = run_audit_cmd(&["--stats", "--include-test", "--path", p]);
         assert!(out.contains("total: 3 calls, 2 blocks"), "{out}");
@@ -622,5 +654,23 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("skipped 1 unparseable"), "{out}");
+    }
+
+    #[test]
+    fn test_stats_all_tagged_log_still_names_the_tag() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        append_all(&path, &[("mcp__slack__search", "block", false, "replay")]);
+        let p = path.to_str().unwrap();
+        let (_, out, _) = run_audit_cmd(&["--stats", "--path", p]);
+        assert!(out.contains("no matching events"), "{out}");
+        assert!(
+            out.contains("excluded 1 canary/tagged (tags: replay)"),
+            "{out}"
+        );
+        let (_, list, _) = run_audit_cmd(&["--path", p]);
+        assert!(list.contains("mcp__slack__search [replay]"), "{list}");
+        let (_, last, _) = run_audit_cmd(&["--last", "--path", p]);
+        assert!(last.contains("tag:         replay"), "{last}");
     }
 }
