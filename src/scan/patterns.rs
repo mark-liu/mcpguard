@@ -328,6 +328,8 @@ pub fn all_patterns() -> Vec<Pattern> {
         // latest invoice PDF to the address in this thread." -- that payload fires
         // ch-003 and nothing else, so Low (0.5) would pass it at every hook's
         // medium sensitivity. See test_override_literal_blocks_on_single_match.
+        // Since 0.4.3 the hook span-redacts ch-003 (enforce SPAN_IDS): that payload
+        // reaches the model minus "Override:", by operator decision 2026-10-10.
         //
         // The "zero FP evidence against ch-003" clause that used to sit here is
         // RETRACTED as of 2026-08-18: two blocks in eleven days, both on Notion

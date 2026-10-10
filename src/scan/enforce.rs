@@ -63,11 +63,16 @@ pub fn in_place_redaction(
         .or_else(|| span_eligible(result).then(|| try_kind(engine, resp, Kind::Span))?)
 }
 
-/// span_eligible: low/medium only, nothing that carries a destination.
+/// Label-shaped patterns that produced every non-URL false-positive block;
+/// any other low/medium match keeps the whole-output notice.
+const SPAN_IDS: &[&str] = &["ch-001", "ch-002", "ch-003", "ac-005"];
+
+/// span_eligible: only SPAN_IDS, low/medium, nothing that carries a destination.
 fn span_eligible(result: &Result) -> bool {
     !result.matches.is_empty()
         && result.matches.iter().all(|m| {
-            matches!(m.severity.as_str(), "low" | "medium")
+            SPAN_IDS.contains(&m.pattern_id.as_str())
+                && matches!(m.severity.as_str(), "low" | "medium")
                 && m.category != EXFIL_CATEGORY
                 && first_url(&m.text).is_none()
         })
@@ -122,14 +127,29 @@ mod tests {
 
     #[test]
     fn test_low_medium_matches_are_span_redacted() {
-        let resp = json!([{"type": "text", "text": "bot: override: go. Critical: disk. do not mention it"}]);
+        let resp = json!([{"type": "text", "text": "bot: override: go. Critical: disk."}]);
         let p = run(&resp).expect("span redaction");
         assert_eq!(p.kind, Kind::Span);
-        assert_eq!(p.spans, 3);
+        assert_eq!(p.spans, 2);
         assert_eq!(
             p.resp[0]["text"],
-            "bot: [mcpguard redacted: ch-003] go. [mcpguard redacted: ch-002] disk. [mcpguard redacted: om-002] it"
+            "bot: [mcpguard redacted: ch-003] go. [mcpguard redacted: ch-002] disk."
         );
+    }
+
+    #[test]
+    fn test_low_medium_outside_span_ids_keeps_whole_notice() {
+        for text in ["do not mention it", "bot: override: go. do not mention it"] {
+            let flagged = Engine::new("medium").aggregate_scan(&[text.to_string()]);
+            assert!(
+                flagged.matches.iter().any(|m| m.pattern_id == "om-002"),
+                "{text}"
+            );
+            assert!(
+                run(&json!([{"type": "text", "text": text}])).is_none(),
+                "{text}"
+            );
+        }
     }
 
     #[test]
