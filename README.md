@@ -95,6 +95,14 @@ the server. Register it in `settings.json`:
 `redact` fails closed: a critical match, or any match left when the rewritten
 output is rescanned, falls back to the whole-output notice.
 
+Claude Code passes the raw tool output through when a hook times out, crashes
+or exits without a replacement. So in `block` and `redact` mode the hook
+withholds the output instead (a `[mcpguard withheld: ...]` notice plus an audit
+row) when the scan overruns `--deadline-ms` (default 3500, `0` disables), panics,
+gets unparseable input, or is given bad flags. Keep `--deadline-ms` at least a
+second below the settings.json `timeout`. Lone UTF-16 surrogates in the input,
+which JSON parsers reject, are replaced with U+FFFD and scanned.
+
 ### Audit log and stats
 
 Every scan, pass included, from both the hook and the proxy appends one
