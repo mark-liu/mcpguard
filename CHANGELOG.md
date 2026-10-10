@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed - in-place redaction skips huge payloads
+
+Payloads over 2 MB of text get the whole-output notice instead of span or URL
+redaction, so the rewrite and rescan cannot push the hook past its timeout,
+which delivers unscanned output. ei-002's `host:port` destination now needs a
+letter first, so a time such as `14:32` is not a destination.
+
 ### Added
 
 - Span-level redaction in `hook --mode redact` and the proxy's redact action:

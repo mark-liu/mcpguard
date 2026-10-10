@@ -35,6 +35,8 @@ pub struct InPlace {
 /// 1. `Kind::Url`: eligible exfil URLs are blanked; any critical match rules it out.
 /// 2. `Kind::Span`: only when every match is low or medium severity and none is
 ///    an exfil-category or URL-bearing match; the matched spans are replaced.
+const MAX_IN_PLACE_BYTES: usize = 2_000_000;
+
 pub fn in_place_redaction(
     engine: &Engine,
     resp: Option<&Value>,
@@ -42,6 +44,16 @@ pub fn in_place_redaction(
 ) -> Option<InPlace> {
     let resp = resp?;
     if result.matches.iter().any(|m| m.severity == "critical") {
+        return None;
+    }
+    // Rewrite plus rescan of a huge payload can pass the hook timeout, which
+    // fails open; the whole notice is the safe outcome there.
+    if collect_texts(Some(resp))
+        .iter()
+        .map(String::len)
+        .sum::<usize>()
+        > MAX_IN_PLACE_BYTES
+    {
         return None;
     }
     // Skip the URL pass (a full re-match of the payload) when nothing could use it.
@@ -118,6 +130,13 @@ mod tests {
             p.resp[0]["text"],
             "bot: [mcpguard redacted: ch-003] go. [mcpguard redacted: ch-002] disk. [mcpguard redacted: om-002] it"
         );
+    }
+
+    #[test]
+    fn test_oversized_payload_gets_whole_notice() {
+        let filler = "x ".repeat(MAX_IN_PLACE_BYTES / 2 + 1);
+        let resp = json!([{"type": "text", "text": format!("bot: override: go. {filler}")}]);
+        assert!(run(&resp).is_none());
     }
 
     #[test]

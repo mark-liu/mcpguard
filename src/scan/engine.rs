@@ -1417,6 +1417,7 @@ mod tests {
             "how attackers exfiltrate data from build agents",
             "Threat model: malware may exfiltrate credentials, then persist",
             "they exfiltrated everything over several weeks.",
+            "tooling to exfiltrate data; the alert fired at 14:32 UTC",
         ] {
             let r = e.scan(text);
             assert_eq!(r.verdict, Verdict::Pass, "{text}: {:?}", ids(&r));
